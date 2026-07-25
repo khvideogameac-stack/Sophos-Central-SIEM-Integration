@@ -74,6 +74,20 @@
     </mitre>
   </rule>
 
+  <!-- Same detection arriving on the alert stream rather than the event
+       stream: Sophos is saying this one needs action, so it outranks the
+       event. A child of 100210 rather than a sibling, so the malware group
+       and MITRE tagging still apply. -->
+  <rule id="100216" level="13">
+    <if_sid>100210</if_sid>
+    <field name="datastream">^alert$</field>
+    <description>Sophos: malware ALERT - $(name) on $(location)</description>
+    <group>malware,sophos_threat,sophos_alert,</group>
+    <mitre>
+      <id>T1204</id>
+    </mitre>
+  </rule>
+
   <rule id="100213" level="10">
     <if_sid>100200</if_sid>
     <field name="type">^Event::Endpoint::Threat::PuaDetected$</field>
@@ -137,7 +151,10 @@
 
   <!-- ===============================================================
        Alerts. The alert stream is Sophos telling you something needs
-       action, so it outranks the equivalent event.
+       action, so it outranks the equivalent event. Note these are the
+       catch-all: an alert whose type already matched a specific rule
+       above is escalated by a child of that rule instead (see 100216),
+       which keeps its group and MITRE tagging.
        =============================================================== -->
 
   <rule id="100240" level="10">
