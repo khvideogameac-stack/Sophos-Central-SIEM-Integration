@@ -3,76 +3,52 @@
 # API token setup steps: https://community.sophos.com/kb/en-us/125169
 token_info = <Copy API Access URL + Headers block from Sophos Central here>
 
-
 # Client ID and Client Secret for Partners, Organizations and Tenants
-# <Copy Client ID and Client Secret from Sophos Central here>
-#
-# These three can instead be supplied through the environment, which takes
-# precedence over anything set here. Use that to keep the secret out of a
-# file on disk (systemd LoadCredential, Docker/Kubernetes secrets):
+# Prefer environment variables so secrets do not need to be stored in this file:
 #   SOPHOS_CLIENT_ID, SOPHOS_CLIENT_SECRET, SOPHOS_TENANT_ID
 client_id =
 client_secret =
-# Customer tenant Id
 tenant_id =
 
-# Host URL for Oauth token
+# Host URL for OAuth token
 auth_url = https://id.sophos.com/api/v2/oauth2/token
 
-# whoami API host url
+# whoami API host URL
 api_host = api.central.sophos.com
 
-# format can be json, cef, keyvalue or wazuh
-#
-# Use "wazuh" when feeding Wazuh. It emits the same one-object-per-line JSON as
-# "json", but additionally copies source_info.ip to srcip and source to dstuser
-# so Wazuh promotes them to static fields (GeoIP, <srcip>, <user> matching),
-# and adds the "integration" marker the shipped rules key on.
-# See wazuh/README.md.
-format = json
+# Wazuh-safe defaults. The shipped rules require format = wazuh.
+format = wazuh
 
-# filename can be syslog, stdout, any custom filename
-# Custom files are created under the log/ folder. Prefer a file over syslog for
-# Wazuh: syslog over UDP silently truncates large events.
-filename = result.txt
+# File output avoids UDP truncation and preserves full_log in Wazuh.
+# This value must be a plain filename, not an absolute path or a path containing ..
+filename = sophos_central.json
 
-# Rotate the output file once it reaches this size, in MB. 0 disables rotation,
-# which lets the file grow until the disk fills. Rotation is rename-and-create,
-# which Wazuh's logcollector follows correctly.
-max_log_file_size_mb = 0
+# Rotate before the feed can grow until the disk fills.
+max_log_file_size_mb = 100
 log_file_backup_count = 5
 
-# endpoint can be event, alert or all
-endpoint = event
+# Collect both events and alerts.
+endpoint = all
 
-# syslog properties
-# for remote address use <remoteServerIp>:<port>, for e.g. 192.1.2.3:514
-# for linux local systems use /dev/log
-# for MAC OSX use /var/run/syslog
-# append_nul will append null at the end of log message if set to true
+# Syslog properties, only used when filename = syslog
 address = /var/run/syslog
 facility = daemon
 socktype = udp
 append_nul = false
 
-# cache file full or relative path (with a ".json" extension)
+# Cache file full or relative path (with a .json extension)
 state_file_path = state/siem_sophos.json
 
-# Delay the data collection by X minute to avoid events missing issue from Sophos API
-# The issue could be due to some specific host being ahead in time for a few minute and Sophos Central would consider events received from that host as a checkpoint.
+# Delay collection to avoid late-arriving events being skipped.
 events_from_date_offset_minutes = 0
-
-# Delay the data collection by X minute.
 alerts_from_date_offset_minutes = 0
 
-# Convert the dhost field to valid fqdn.
+# Convert the dhost field to valid FQDN for CEF/JSON compatibility modes.
 convert_dhost_field_to_valid_fqdn = true
 
-
-# Seconds to wait on any single Sophos API request before retrying it.
+# Seconds to wait on a single Sophos API request before retrying it.
 request_timeout_seconds = 30
 
-# Logging level for the collector's own diagnostics (not the event output).
-# Matches python's logging levels: DEBUG, INFO, WARNING, ERROR, CRITICAL.
-# Keep this at INFO in production: DEBUG logs full API responses.
+# Collector diagnostics. DEBUG must never print request headers, credentials,
+# authorization tokens, request bodies, or full API response payloads.
 logging_level = INFO
