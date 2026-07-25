@@ -212,13 +212,18 @@ RULEFILE="$OSSEC_DIR/etc/rules/0910-sophos_central_rules.xml"
 if [ -f "$RULEFILE" ]; then
     pass "rule file installed"
     info "$(ls -l "$RULEFILE")"
-    if [ -x "$OSSEC_DIR/bin/wazuh-logtest" ]; then
-        if "$OSSEC_DIR/bin/wazuh-logtest" -t >/dev/null 2>&1; then
+    # wazuh-analysisd -t is the portable way to validate the ruleset.
+    # wazuh-logtest grew a -t flag only in later versions; on older ones it is
+    # a python wrapper that rejects the argument.
+    if [ -x "$OSSEC_DIR/bin/wazuh-analysisd" ]; then
+        if ANALYSISD_OUT=$("$OSSEC_DIR/bin/wazuh-analysisd" -t 2>&1); then
             pass "ruleset loads without error"
         else
             fail "ruleset failed to load:"
-            "$OSSEC_DIR/bin/wazuh-logtest" -t 2>&1 | tail -15 | sed 's/^/          /'
+            printf '%s\n' "$ANALYSISD_OUT" | tail -15 | sed 's/^/          /'
         fi
+    else
+        warn "wazuh-analysisd not found, skipping ruleset validation"
     fi
 else
     fail "rule file NOT installed at $RULEFILE"
@@ -242,10 +247,14 @@ fi
 
 head1 "7. Alerts actually produced"
 
+# grep -c prints 0 and exits 1 when there are no matches, so `|| echo 0`
+# produced the two-line value "0\n0" and broke the integer test.
 ALERTS="$OSSEC_DIR/logs/alerts/alerts.json"
 if [ -r "$ALERTS" ]; then
-    N_SOPHOS=$(grep -c 'sophos_central' "$ALERTS" 2>/dev/null || echo 0)
-    N_TEST=$(grep -c 'test_event' "$ALERTS" 2>/dev/null || echo 0)
+    N_SOPHOS=$(grep -c 'sophos_central' "$ALERTS" 2>/dev/null || true)
+    N_TEST=$(grep -c 'test_event' "$ALERTS" 2>/dev/null || true)
+    N_SOPHOS=${N_SOPHOS:-0}
+    N_TEST=${N_TEST:-0}
     if [ "$N_SOPHOS" -gt 0 ]; then
         pass "$N_SOPHOS Sophos alerts in alerts.json ($N_TEST synthetic)"
         info "most recent:"
@@ -260,9 +269,53 @@ for l in sys.stdin:
 ' 2>/dev/null
     else
         fail "no Sophos alerts have ever been generated"
+        # The usual cause is not a broken rule but a file whose existing lines
+        # were already consumed before the rules were installed. logcollector
+        # records its position and only reads what is appended after it;
+        # restarting the manager does not make it re-read old lines.
+        if [ -n "${RULE_HIT:-}" ]; then
+            info "but logtest DOES match (see section 6), so the rules are fine."
+            info "logcollector only reads lines appended after its saved position,"
+            info "so anything written before the rules were installed is never"
+            info "re-read. Append a new event and it will alert:"
+            info "  python3 $SIEM_DIR/tools/generate_test_events.py --append $OUTPUT"
+        fi
     fi
 else
     warn "cannot read $ALERTS"
+fi
+
+# A level 3 alert is silently discarded if the threshold was raised, which
+# looks identical to a rule that never fired.
+ALERT_LEVEL=$(python3 - "$OSSEC_CONF" <<'PYEOF' 2>/dev/null
+import sys, xml.etree.ElementTree as ET
+try:
+    raw = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+    root = ET.fromstring("<wrapper>" + raw + "</wrapper>")
+except Exception:
+    sys.exit(0)
+for alerts in root.iter("alerts"):
+    lvl = alerts.find("log_alert_level")
+    if lvl is not None and lvl.text:
+        print(lvl.text.strip())
+PYEOF
+)
+if [ -n "$ALERT_LEVEL" ]; then
+    if [ "$ALERT_LEVEL" -le 3 ]; then
+        pass "log_alert_level = $ALERT_LEVEL (low severity Sophos events will alert)"
+    else
+        warn "log_alert_level = $ALERT_LEVEL"
+        info "rules 100201 (level 3) and 100230 (level 4) are below this and"
+        info "will never reach alerts.json or the dashboard."
+    fi
+else
+    info "log_alert_level not set, Wazuh default is 3"
+fi
+
+if printf '%s' "${JSONOUT:-}" >/dev/null; then :; fi
+JSONOUT=$(grep -o '<jsonout_output>[^<]*' "$OSSEC_CONF" 2>/dev/null | tail -1 | cut -d'>' -f2)
+if [ "${JSONOUT:-yes}" = "no" ]; then
+    warn "jsonout_output = no - alerts.json is not written (alerts.log still is)"
 fi
 
 head1 "8. logcollector activity"
