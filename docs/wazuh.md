@@ -129,6 +129,54 @@ sudo systemctl enable --now sophos-siem.timer
 Overlapping runs are safe: the collector takes an advisory lock on the state
 file and a second run exits 5 without collecting.
 
+### With cron instead
+
+```
+*/5 * * * * cd /opt/sophos-siem && SOPHOS_SIEM_HOME=/opt/sophos-siem /usr/bin/python3 siem.py >> /var/log/sophos-siem/collector.log 2>&1
+```
+
+The `cd` is required: without it the script resolves paths against cron's
+working directory.
+
+### Pick one user and stay with it
+
+The collector does not need root, and running it as root once is enough to
+cause trouble later: `log/`, `state/` and the lock file become root-owned, and
+the next unprivileged run fails on them. Do not put `sudo` in a crontab to work
+around that - in a user crontab it usually fails anyway, since there is no TTY
+and sudo wants a password.
+
+If a cron entry only fails as an unprivileged user, check the redirect target
+before blaming the script. `/var/log/` is not writable by a normal user, so the
+shell fails before Python starts:
+
+```bash
+sudo mkdir -p /var/log/sophos-siem
+sudo chown "$USER":"$USER" /var/log/sophos-siem
+sudo chown -R "$USER":"$USER" /opt/sophos-siem   # undo any earlier root-owned files
+```
+
+Rotate that log, keeping ownership across rotations:
+
+```
+# /etc/logrotate.d/sophos-siem
+/var/log/sophos-siem/collector.log {
+    weekly
+    rotate 4
+    compress
+    missingok
+    notifempty
+    su sophos-siem sophos-siem
+    create 0644 sophos-siem sophos-siem
+}
+```
+
+Without the `su` and `create` lines the rotated file reverts to root ownership
+and the next run cannot write to it.
+
+Wazuh reads the event output regardless of which user wrote it, since
+`wazuh-logcollector` runs as root.
+
 ## 3. Point Wazuh at the output
 
 Merge into `/var/ossec/etc/ossec.conf` on whichever host runs the collector:
@@ -218,5 +266,17 @@ log directory, and check `/var/ossec/logs/ossec.log` for the localfile.
 **Duplicate events after an incident.** The state file was reset, so the run
 re-fetched the last 12 hours. Expected; Wazuh does not deduplicate.
 
-**Collector exits 5 every run.** A stale lock from a killed process. Confirm no
-`siem.py` is running, then delete `state/siem_sophos.json.lock`.
+**Collector exits 5 every run.** Another run genuinely holds the lock. Check
+`cat state/siem_sophos.json.lock` for the holder's pid. A lock file left behind
+by a killed run does not block anything - the kernel releases `flock` when the
+holder dies - so deleting the file is not the fix.
+
+**Collector exits 4 with "Cannot open lock file".** Permissions, not
+contention. The state directory is not writable by the user running the
+collector, usually because an earlier run under `sudo` left root-owned files
+behind. See "Pick one user and stay with it" above.
+
+**Cron entry does nothing, but it works by hand with sudo.** Test the redirect
+target separately - `>> /var/log/something.log` fails for an unprivileged user
+before Python runs, which looks like the script failing. Adding `sudo` to the
+crontab is the wrong fix; see above.
