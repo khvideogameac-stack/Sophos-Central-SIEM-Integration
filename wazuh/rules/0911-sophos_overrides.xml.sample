@@ -45,13 +45,33 @@
     <group>sophos_compliance,</group>
   </rule>
 
-  <!-- Detection dismissed. Delete this block if you want to review every
-       dismissal - that is a reasonable policy, it is simply noisy. -->
+  <!-- Detection dismissed. THINK BEFORE ENABLING THIS ONE.
+
+       It is high volume, which is why it is here, but volume is not the same
+       as noise. In the tenant this file was measured against, all 72
+       dismissals in a day landed on a single endpoint - the same endpoint
+       carrying 34 failed cleanups and two dozen cracks and keygens. Read
+       together that is somebody clearing detections instead of remediating
+       them, which is exactly the pattern you want an alert for.
+
+       Suppress this only once you know your dismissals are routine. If in
+       doubt, delete this block and leave them at level 5, or raise the level
+       and alert on the correlation below instead. -->
   <rule id="100217" level="0" overwrite="yes">
     <if_sid>100200</if_sid>
     <field name="type">^Event::Endpoint::CoreDismissed$</field>
     <description>Sophos: detection dismissed (suppressed)</description>
     <group>sophos_threat,</group>
+  </rule>
+
+  <!-- Repeated dismissals on one endpoint. Keep this even if you suppress
+       individual dismissals above: one dismissal is routine, ten on the same
+       machine in an hour is somebody making a problem disappear. -->
+  <rule id="100293" level="10" frequency="10" timeframe="3600">
+    <if_matched_sid>100217</if_matched_sid>
+    <same_field>location</same_field>
+    <description>Sophos: repeated detection dismissals on $(location)</description>
+    <group>malware,sophos_threat,</group>
   </rule>
 
 </group>
