@@ -546,7 +546,12 @@ def main():
     # Serialise runs against this state file. A run that overruns its schedule
     # would otherwise have the next one racing it for the cursor.
     lock = state.RunLock(state_data.get_lock_file())
-    if not lock.acquire():
+    try:
+        acquired = lock.acquire()
+    except state.LockUnavailable as e:
+        logging.critical("%s" % e)
+        return exit_codes.STATE_ERROR
+    if not acquired:
         logging.warning(
             "Another collector run holds %s, exiting without collecting"
             % state_data.get_lock_file()

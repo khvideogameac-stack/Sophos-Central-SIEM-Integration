@@ -247,6 +247,36 @@ class TestRunLock(unittest.TestCase):
             self.assertTrue(lock.acquire())
         self.assertFalse(os.path.exists(self.lock_path))
 
+    def test_unopenable_lock_file_is_not_reported_as_contention(self):
+        # A permission error on the lock file used to return False, which the
+        # caller reported as "another run holds it" - sending the operator
+        # hunting for a process that does not exist.
+        with patch("builtins.open", side_effect=PermissionError(13, "denied")):
+            with self.assertRaises(state.LockUnavailable) as ctx:
+                state.RunLock(self.lock_path).acquire()
+        self.assertIn("Cannot open lock file", str(ctx.exception))
+
+    def test_missing_directory_is_not_reported_as_contention(self):
+        lock = state.RunLock(os.path.join(self.tmpdir, "nope", "s.json.lock"))
+        with self.assertRaises(state.LockUnavailable):
+            lock.acquire()
+
+    def test_stale_lock_file_does_not_block(self):
+        # flock is released by the kernel when the holder dies, so a lock file
+        # left behind by a killed run must not wedge the next one.
+        with open(self.lock_path, "w") as f:
+            f.write("99999")
+        lock = state.RunLock(self.lock_path)
+        self.assertTrue(lock.acquire())
+        lock.release()
+
+    def test_holder_pid_is_recorded(self):
+        lock = state.RunLock(self.lock_path)
+        lock.acquire()
+        with open(self.lock_path) as f:
+            self.assertEqual(f.read().strip(), str(os.getpid()))
+        lock.release()
+
 
 class TestExitCodes(unittest.TestCase):
     def test_all_failure_codes_are_non_zero(self):

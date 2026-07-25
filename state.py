@@ -13,6 +13,7 @@
 #
 import sys
 import os
+import errno
 import json
 import tempfile
 from pathlib import Path
@@ -25,13 +26,22 @@ except ImportError:  # Windows
     fcntl = None
 
 
+class LockUnavailable(Exception):
+    """The lock file itself could not be opened.
+
+    Distinct from the lock being held: this is a permissions or path problem
+    that no amount of waiting will fix.
+    """
+
+
 class RunLock:
     """An advisory lock ensuring only one collector runs against a state file.
 
     Overlapping runs - a slow run still paginating when cron starts the next
     one - race on the cursor, which duplicates events downstream and can move
     the cursor backwards. Held for the lifetime of the process; the lock is
-    released by the OS if we are killed.
+    released by the OS if we are killed, so a lock file left behind by a killed
+    run does not block the next one.
     """
 
     def __init__(self, lock_file):
@@ -41,22 +51,49 @@ class RunLock:
     def acquire(self):
         """Take the lock.
         Returns:
-            bool -- True if acquired, False if another run holds it
+            bool -- True if acquired, False if another run genuinely holds it
+        Raises:
+            LockUnavailable -- the lock file could not be opened at all
         """
         if fcntl is None:
             logging.debug("File locking unavailable on this platform, skipping run lock")
             return True
+
+        # Opening and locking are separate failures and must not be conflated.
+        # Reporting "another run holds it" for what is really a permission
+        # error sends you hunting for a process that does not exist.
         try:
-            self.handle = open(self.lock_file, "w")
+            # Append rather than truncate, so a failure here cannot destroy the
+            # pid recorded by whoever does hold the lock.
+            self.handle = open(self.lock_file, "a")
+        except OSError as e:
+            raise LockUnavailable(
+                "Cannot open lock file %s: %s. Check that the state directory "
+                "is writable by the user running the collector."
+                % (self.lock_file, e)
+            )
+
+        try:
             fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as e:
+            self.handle.close()
+            self.handle = None
+            if e.errno in (errno.EACCES, errno.EAGAIN):
+                # Genuine contention: someone else holds it right now.
+                return False
+            raise LockUnavailable(
+                "Cannot lock %s: %s" % (self.lock_file, e)
+            )
+
+        try:
+            self.handle.seek(0)
+            self.handle.truncate()
             self.handle.write(str(os.getpid()))
             self.handle.flush()
-            return True
-        except (IOError, OSError):
-            if self.handle:
-                self.handle.close()
-                self.handle = None
-            return False
+        except OSError:
+            # The pid is a debugging aid, not load-bearing. We hold the lock.
+            pass
+        return True
 
     def release(self):
         """Release the lock and remove the lock file."""
