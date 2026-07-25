@@ -535,6 +535,12 @@ def main():
         logging.critical("Could not load %s: %s" % (options.config, e))
         return exit_codes.CONFIG_ERROR
 
+    # Log the resolved path, not the requested one: "why is it writing to the
+    # wrong file" is nearly always a different config.ini than you think.
+    logging.info(
+        "Loaded config: %s (format=%s, filename=%s)"
+        % (os.path.abspath(options.config), config_data.format, config_data.filename)
+    )
     logging.info("Logging Level is set as: "+config_data.logging_level)
     logger = logging.getLogger()
     logger.setLevel(config_data.logging_level)

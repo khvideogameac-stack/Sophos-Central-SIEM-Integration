@@ -60,10 +60,36 @@ class Config:
 
     def __init__(self, path):
         """Open the config file"""
+        # ConfigParser.read() silently ignores a file that does not exist.
+        # Combined with the defaults below that produces a run which looks
+        # entirely healthy while writing to the wrong file in the wrong format,
+        # so check for the file rather than letting it pass.
+        if not os.path.isfile(path):
+            raise IOError(
+                "Config file not found: %s. Copy config.ini.sample to "
+                "config.ini, or pass an explicit path with -c." % path
+            )
+
+        # Probe without defaults first. Defaults appear in every section, so
+        # once they are applied there is no way to tell whether the file itself
+        # supplied [login] - and a file lacking it would answer every lookup
+        # from the defaults without complaint.
+        probe = ConfigParser.ConfigParser()
+        try:
+            probe.read(path)
+        except ConfigParser.MissingSectionHeaderError:
+            # No header at all. Same operator error as a misnamed section, so
+            # give it the same message rather than a parser traceback.
+            probe = None
+        if probe is None or not probe.has_section("login"):
+            raise ValueError(
+                "Config file %s has no [login] section. Every option must sit "
+                "under a line reading exactly [login]." % path
+            )
+
         self.config = ConfigParser.ConfigParser(defaults=CONFIG_DEFAULTS)
-        if not self.config.has_section("login"):
-            self.config.add_section("login")
         self.config.read(path)
+        self.path = path
 
     def __getattr__(self, name):
         # __getattr__ runs only when normal lookup fails, so guard against
