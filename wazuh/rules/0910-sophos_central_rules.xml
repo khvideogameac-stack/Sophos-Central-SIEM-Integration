@@ -1,0 +1,214 @@
+<!--
+  Sophos Central rules for Wazuh.
+
+  Install to /var/ossec/etc/rules/ on the Wazuh manager, then restart
+  wazuh-manager. See wazuh/README.md for the full procedure.
+
+  These assume `format = wazuh` in config.ini, which adds the `integration`
+  marker every rule below keys on, and copies the client IP into `srcip` so
+  Wazuh's GeoIP and <srcip> matching work. With `format = json` the events
+  still decode, but rule 100200 will not match and nothing here fires.
+
+  Rule id range 100200-100299 is reserved for this integration. Wazuh reserves
+  everything below 100000 for its own ruleset; if 1002xx collides with
+  something you already run, renumber the whole block consistently.
+
+  ORDER MATTERS. Every rule here is a child of 100200, and among sibling rules
+  Wazuh takes the first one that matches. So the specific type rules come
+  first and the generic severity fallback comes last, otherwise a low-severity
+  threat detection would match the severity rule and never reach its own.
+
+  Field matching uses osregex, Wazuh's default engine, not PCRE. In osregex
+  `\.` means "any character" and a bare `.` is a literal dot - which is why
+  the wildcard below is written `\.*` rather than `.*`.
+
+  Levels follow Sophos severity by default:
+    none/low -> 3/4, medium -> 7, high -> 10, very_high -> 12
+  Type-specific rules override that where the event type is more informative
+  than the severity Sophos assigned it.
+-->
+<group name="sophos,sophos_central,">
+
+  <!-- Base rule. Level 0 so it never alerts on its own; everything below
+       chains off it, which keeps the decoded_as test out of every child. -->
+  <rule id="100200" level="0">
+    <decoded_as>json</decoded_as>
+    <field name="integration">^sophos-central$</field>
+    <description>Sophos Central event (base rule, does not alert)</description>
+  </rule>
+
+  <!-- ===============================================================
+       Threat detections. Most specific first.
+       =============================================================== -->
+
+  <!-- Cleanup failure outranks plain detection: the endpoint is still
+       infected and needs someone to touch it. Listed before Detected so it
+       wins for events matching both shapes. -->
+  <rule id="100212" level="13">
+    <if_sid>100200</if_sid>
+    <field name="type">Threat::\.*CleanupFailed$</field>
+    <description>Sophos: malware cleanup FAILED - $(name) on $(location)</description>
+    <group>malware,sophos_threat,</group>
+    <mitre>
+      <id>T1204</id>
+    </mitre>
+  </rule>
+
+  <rule id="100214" level="12">
+    <if_sid>100200</if_sid>
+    <field name="type">Threat::CommandAndControl</field>
+    <description>Sophos: command and control traffic - $(name) on $(location)</description>
+    <group>malware,sophos_threat,</group>
+    <mitre>
+      <id>T1071</id>
+    </mitre>
+  </rule>
+
+  <rule id="100210" level="12">
+    <if_sid>100200</if_sid>
+    <field name="type">^Event::Endpoint::Threat::Detected$</field>
+    <description>Sophos: malware detected - $(name) on $(location)</description>
+    <group>malware,sophos_threat,</group>
+    <mitre>
+      <id>T1204</id>
+    </mitre>
+  </rule>
+
+  <rule id="100213" level="10">
+    <if_sid>100200</if_sid>
+    <field name="type">^Event::Endpoint::Threat::PuaDetected$</field>
+    <description>Sophos: potentially unwanted application - $(name) on $(location)</description>
+    <group>malware,sophos_threat,</group>
+  </rule>
+
+  <!-- Someone overrode a block. Worth seeing even though nothing broke. -->
+  <rule id="100215" level="9">
+    <if_sid>100200</if_sid>
+    <field name="type">Threat::HIPSDismissed$</field>
+    <description>Sophos: HIPS detection dismissed - $(name) on $(location)</description>
+    <group>sophos_threat,</group>
+  </rule>
+
+  <rule id="100211" level="6">
+    <if_sid>100200</if_sid>
+    <field name="type">^Event::Endpoint::Threat::CleanedUp$</field>
+    <description>Sophos: malware cleaned up - $(name) on $(location)</description>
+    <group>malware,sophos_threat,</group>
+  </rule>
+
+  <!-- ===============================================================
+       Data loss prevention.
+       =============================================================== -->
+
+  <rule id="100220" level="8">
+    <if_sid>100200</if_sid>
+    <field name="type">^Event::Endpoint::DataLossPreventionUserAllowed$</field>
+    <description>Sophos DLP: user allowed transfer - $(name) on $(location)</description>
+    <group>sophos_dlp,</group>
+    <mitre>
+      <id>T1567</id>
+    </mitre>
+  </rule>
+
+  <!-- ===============================================================
+       Policy and hygiene. Low value individually, useful in aggregate.
+       =============================================================== -->
+
+  <rule id="100230" level="4">
+    <if_sid>100200</if_sid>
+    <field name="type">^Event::Endpoint::WebControlViolation$|^Event::Endpoint::WebFilteringBlocked$</field>
+    <description>Sophos: web policy violation on $(location)</description>
+    <group>sophos_web,</group>
+  </rule>
+
+  <rule id="100231" level="5">
+    <if_sid>100200</if_sid>
+    <field name="type">^Event::Endpoint::NonCompliant$</field>
+    <description>Sophos: endpoint out of compliance - $(location)</description>
+    <group>sophos_compliance,</group>
+  </rule>
+
+  <rule id="100232" level="5">
+    <if_sid>100200</if_sid>
+    <field name="type">^Event::Endpoint::UpdateFailure$</field>
+    <description>Sophos: endpoint protection update failed - $(location)</description>
+    <group>sophos_compliance,</group>
+  </rule>
+
+  <!-- ===============================================================
+       Alerts. The alert stream is Sophos telling you something needs
+       action, so it outranks the equivalent event.
+       =============================================================== -->
+
+  <rule id="100240" level="10">
+    <if_sid>100200</if_sid>
+    <field name="datastream">^alert$</field>
+    <description>Sophos Central alert: $(name) on $(location)</description>
+    <group>sophos_alert,</group>
+  </rule>
+
+  <rule id="100241" level="13">
+    <if_sid>100240</if_sid>
+    <field name="severity">^high$|^very_high$</field>
+    <description>Sophos Central HIGH alert: $(name) on $(location)</description>
+    <group>sophos_alert,</group>
+  </rule>
+
+  <!-- ===============================================================
+       Severity fallback. Anything not matched above still lands at a
+       level derived from what Sophos told us. Must stay last.
+       =============================================================== -->
+
+  <rule id="100203" level="10">
+    <if_sid>100200</if_sid>
+    <field name="severity">^high$|^very_high$</field>
+    <description>Sophos Central: $(type) on $(location)</description>
+    <group>sophos_high,</group>
+  </rule>
+
+  <rule id="100202" level="7">
+    <if_sid>100200</if_sid>
+    <field name="severity">^medium$</field>
+    <description>Sophos Central: $(type) on $(location)</description>
+    <group>sophos_medium,</group>
+  </rule>
+
+  <rule id="100201" level="3">
+    <if_sid>100200</if_sid>
+    <field name="severity">^none$|^low$</field>
+    <description>Sophos Central: $(type) on $(location)</description>
+    <group>sophos_low,</group>
+  </rule>
+
+  <!-- ===============================================================
+       Correlation.
+       =============================================================== -->
+
+  <!-- Repeated detections on one endpoint in a short window reads as an
+       outbreak or a re-infecting dropper rather than a one-off catch. -->
+  <rule id="100290" level="14" frequency="4" timeframe="600">
+    <if_matched_sid>100210</if_matched_sid>
+    <same_field>location</same_field>
+    <description>Sophos: repeated malware detections on $(location) - possible outbreak</description>
+    <group>malware,sophos_threat,</group>
+  </rule>
+
+  <!-- The same threat name spreading across endpoints is what distinguishes
+       a worm from background noise. This is the rule most likely to need
+       tuning for your Wazuh version - verify it with wazuh-logtest. -->
+  <rule id="100291" level="14" frequency="6" timeframe="900">
+    <if_matched_sid>100210</if_matched_sid>
+    <same_field>name</same_field>
+    <different_field>location</different_field>
+    <description>Sophos: same threat on multiple endpoints - possible worm activity</description>
+    <group>malware,sophos_threat,</group>
+  </rule>
+
+  <rule id="100292" level="12" frequency="8" timeframe="300">
+    <if_matched_sid>100212</if_matched_sid>
+    <same_field>location</same_field>
+    <description>Sophos: repeated cleanup failures on $(location) - endpoint may be compromised</description>
+    <group>malware,sophos_threat,</group>
+  </rule>
+
+</group>

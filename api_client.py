@@ -25,12 +25,29 @@ import logging.handlers
 import os
 import socket
 import name_mapping
+import random
 from random import randint
 import time
 import config
+import exit_codes
 
 
 SYSLOG_SOCKTYPE = {"udp": socket.SOCK_DGRAM, "tcp": socket.SOCK_STREAM}
+
+# HTTP statuses worth retrying. 403 is included because Sophos Central returns it
+# for a token that expired mid-run, which the next attempt re-mints.
+RETRY_STATUS_CODES = (403, 429, 500, 502, 503, 504)
+
+# Exponential backoff bounds, in seconds.
+RETRY_BASE_DELAY_SECONDS = 2
+RETRY_MAX_DELAY_SECONDS = 60
+
+# Truncate error bodies before they reach the log, they can be whole HTML pages.
+MAX_LOGGED_ERROR_BODY = 512
+
+
+class SophosApiError(Exception):
+    """A request to Sophos Central could not be completed."""
 
 # Initialize the SIEM_LOGGER
 SIEM_LOGGER = logging.getLogger("SIEM")
@@ -63,12 +80,35 @@ class ApiClient:
         self.endpoint = endpoint
         self.options = options
         self.config = config
+        self.request_timeout = self.get_int_config("request_timeout_seconds", 30)
         logdir = self.create_log_dir()
         self.add_siem_logeer_handler(logdir)
         self.opener = self.create_request_builder()
         self.get_noisy_event_types = self.get_noisy_event_types()
 
 
+
+    def get_int_config(self, name, default):
+        """Read an integer config value, falling back to a default.
+        Keeps the collector working against a config.ini written for an older
+        release, which would otherwise raise NoOptionError on a new option.
+        Arguments:
+            name {string}: option name
+            default {int}: value to use when unset or unparsable
+        Returns:
+            int -- config value or default
+        """
+        try:
+            value = getattr(self.config, name)
+        except Exception:
+            return default
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            logging.warning(
+                "Invalid %s value %r in config.ini, using %s" % (name, value, default)
+            )
+            return default
 
     def get_noisy_event_types(self):
         """Return noisy event types
@@ -147,14 +187,17 @@ class ApiClient:
                 address = (host, int(port))
             socktype = SYSLOG_SOCKTYPE[self.config.socktype]
             
-            if socktype == socket.SOCK_STREAM : 
+            if socktype == socket.SOCK_STREAM :
                 #Check whether host is available within 3s for TCP!
                 timeout_seconds = 3
                 try:
                     sock = socket.create_connection(address, timeout=timeout_seconds)
-                except :
-                    logging.critical(f"Could not connect to {self.config.address} via TCP after {timeout_seconds} seconds")
-                    raise SystemExit()
+                    sock.close()
+                except OSError as e:
+                    logging.critical(
+                        f"Could not connect to {self.config.address} via TCP after {timeout_seconds} seconds: {e}"
+                    )
+                    raise SystemExit(exit_codes.TRANSPORT_ERROR)
             else: #UDP
                 logging.warning(f"Using UDP to connect to {self.config.address} - If target is not found, logs will be lost!")
 
@@ -162,15 +205,38 @@ class ApiClient:
                 address, facility, socktype
             )
             logging_handler.append_nul = self.config.append_nul == "true"
-            
+
         elif self.config.filename == "stdout":
             logging_handler = logging.StreamHandler(sys.stdout)
         else:
-            logging_handler = logging.FileHandler(
-                os.path.join(logdir, self.config.filename), "a", encoding="utf-8"
-            )
+            logging_handler = self.create_file_handler(logdir)
         if not SIEM_LOGGER.handlers:
             SIEM_LOGGER.addHandler(logging_handler)
+
+    def create_file_handler(self, logdir):
+        """Build the output file handler, rotating it when configured.
+        An unrotated output file grows without bound, and a log collector
+        tailing it will happily follow it until the disk fills. Rotation is by
+        rename-and-create, which Wazuh's logcollector handles correctly because
+        it notices the inode change and reopens the new file.
+        Arguments:
+            logdir {string}: log directory path
+        Returns:
+            logging.Handler -- file handler
+        """
+        path = os.path.join(logdir, self.config.filename)
+        max_bytes = self.get_int_config("max_log_file_size_mb", 0) * 1024 * 1024
+        backup_count = self.get_int_config("log_file_backup_count", 5)
+
+        if max_bytes > 0:
+            return logging.handlers.RotatingFileHandler(
+                path,
+                mode="a",
+                maxBytes=max_bytes,
+                backupCount=backup_count,
+                encoding="utf-8",
+            )
+        return logging.FileHandler(path, "a", encoding="utf-8")
 
     def get_past_datetime(self, hours):
         """Get the past datetime based on hours argument
@@ -179,47 +245,94 @@ class ApiClient:
         Returns:
             string -- return past datetime
         """
+        # datetime.utcnow() is deprecated from Python 3.12, use an aware datetime.
         return int(
             calendar.timegm(
                 (
-                    (
-                        datetime.datetime.utcnow() - datetime.timedelta(hours=hours)
-                    ).timetuple()
-                )
+                    datetime.datetime.now(datetime.timezone.utc)
+                    - datetime.timedelta(hours=hours)
+                ).utctimetuple()
             )
         )
 
+    def retry_delay(self, attempt, retry_after=None):
+        """Seconds to wait before the next attempt.
+        Honours a server supplied Retry-After when present, otherwise backs off
+        exponentially. A little jitter is added so that several tenants polling
+        on the same cron schedule do not retry in lockstep.
+        Arguments:
+            attempt {int}: zero based attempt number that just failed
+            retry_after {string}: value of the Retry-After header, if any
+        Returns:
+            float -- delay in seconds
+        """
+        if retry_after is not None:
+            try:
+                return min(float(retry_after), RETRY_MAX_DELAY_SECONDS)
+            except (TypeError, ValueError):
+                pass
+        delay = min(RETRY_BASE_DELAY_SECONDS * (2 ** attempt), RETRY_MAX_DELAY_SECONDS)
+        # Cap again after jitter, otherwise the jitter pushes the delay back
+        # over the maximum at the top of the range.
+        return min(delay + random.uniform(0, delay * 0.1), RETRY_MAX_DELAY_SECONDS)
+
     def request_url(self, host_url, body, header, retry_count=3):
-        """Make the request and return response data or throw exception
+        """Make the request and return the response body.
+        Retries transient HTTP statuses and connection level failures with
+        exponential backoff. Raises SophosApiError once the attempts are spent,
+        so callers never receive None.
         Arguments:
             host_url {string}: req url
             body {dict}: req body
             header {dict}: req header
-            retry_count {number}: retry request count
+            retry_count {number}: total number of attempts
         Returns:
-            response -- response data or throw exception
+            bytes -- response body, or raises
         """
-        for i in range(0, retry_count):
+        last_error = None
+        for attempt in range(0, retry_count):
+            retry_after = None
             try:
                 data = urlencode(body).encode("utf-8") if body is not None else body
                 request = urlrequest.Request(host_url, data, header)
-                response = self.opener.open(request)
+                response = self.opener.open(request, timeout=self.request_timeout)
+                return response.read()
             except urlerror.HTTPError as e:
-                if e.code in (503, 504, 403, 429):
+                last_error = e
+                if e.code not in RETRY_STATUS_CODES:
+                    # Read the body once, it is not available after this point.
+                    try:
+                        detail = e.read()[:MAX_LOGGED_ERROR_BODY]
+                    except Exception:
+                        detail = b""
                     logging.error(
-                        'Error "%s" (code %s) on attempt #%s of %s, retrying'
-                        % (e, e.code, i, retry_count)
-                       
+                        "Request failed, not retryable. Error code: %s, Error message: %s"
+                        % (e.code, detail)
                     )
-                    if i < retry_count:
-                        continue
-                logging.error(
-                    "Error during request. Error code: %s, Error message: %s"
-                    % (e.code, e.read())
-                    
+                    raise
+                retry_after = e.headers.get("Retry-After") if e.headers else None
+            except (urlerror.URLError, socket.timeout, OSError) as e:
+                # DNS failure, refused connection, TLS timeout. HTTPError is a
+                # subclass of URLError so it is matched by the branch above first.
+                last_error = e
+
+            if attempt < retry_count - 1:
+                delay = self.retry_delay(attempt, retry_after)
+                logging.warning(
+                    'Error "%s" on attempt %s of %s, retrying in %.1fs'
+                    % (last_error, attempt + 1, retry_count, delay)
                 )
-                raise
-            return response.read()
+                time.sleep(delay)
+            else:
+                logging.error(
+                    'Error "%s" on attempt %s of %s, giving up'
+                    % (last_error, attempt + 1, retry_count)
+                )
+
+        raise SophosApiError(
+            "Request to %s failed after %s attempts: %s"
+            % (host_url, retry_count, last_error)
+        )
 
     def get_alerts_or_events(self):
         """Get alerts/events data
@@ -250,7 +363,7 @@ class ApiClient:
                 )
             else:
                 logging.critical(tenant_obj["error"])
-                raise SystemExit()
+                raise SystemExit(exit_codes.AUTH_ERROR)
         else:
             token_data = config.Token(self.config.token_info)
             results = self.make_token_request(
@@ -270,10 +383,35 @@ class ApiClient:
         events_request_url = "%s%s?%s" % (api_host, self.endpoint, args)
         logging.debug("URL: %s" % events_request_url)
         events_response = self.request_url(events_request_url, None, default_headers)
-        if self.options.debug:
-            logging.info("RESPONSE: %s" % events_response)
-        events = json.loads(events_response)
+        logging.debug("RESPONSE: %s" % events_response)
+        try:
+            events = json.loads(events_response)
+        except json.decoder.JSONDecodeError as e:
+            raise SophosApiError(
+                "%s response was not valid JSON: %s" % (self.endpoint, e)
+            )
         return events
+
+    def validate_response(self, events, endpoint_name):
+        """Check a page response carries the fields the pagination loop needs.
+        A proxy error page or an API error body would otherwise blow up with a
+        bare KeyError several lines later.
+        Arguments:
+            events {dict}: decoded API response
+            endpoint_name {string}: endpoint name, for the error message
+        """
+        if not isinstance(events, dict):
+            raise SophosApiError(
+                "Unexpected %s response, expected a JSON object but got %s"
+                % (endpoint_name, type(events).__name__)
+            )
+        missing = [key for key in ("has_more", "next_cursor") if key not in events]
+        if missing:
+            detail = events.get("message") or events.get("error") or ""
+            raise SophosApiError(
+                "Malformed %s response, missing %s. %s"
+                % (endpoint_name, ", ".join(missing), detail)
+            )
 
     def get_alerts_or_events_req_args(self, params, endpoint_name):
         """Convert the params to query string
@@ -334,6 +472,7 @@ class ApiClient:
         while True:
             args = self.get_alerts_or_events_req_args(params, endpoint_name)
             events = self.call_endpoint(token.url, default_headers, args)
+            self.validate_response(events, endpoint_name)
 
             if "items" in events and len(events["items"]) > 0:
                 logging.info(f"Found {len(events['items'])} new events")
@@ -384,6 +523,7 @@ class ApiClient:
             args = self.get_alerts_or_events_req_args(params, endpoint_name)
             data_region_url = tenant_obj["apiHost"] if "idType" not in tenant_obj else tenant_obj["apiHosts"]["dataRegion"]
             events = self.call_endpoint(data_region_url, default_headers, args)
+            self.validate_response(events, endpoint_name)
             if "items" in events and len(events["items"]) > 0:
                 logging.info(f"Retrieved {len(events['items'])} new events")
                 for e in events["items"]:
@@ -582,7 +722,9 @@ class ApiClient:
             )
             tenant_response = self.request_url(tenant_url, None, default_headers, 1)
 
-            logging.info("Tenant response: %s" % (tenant_response))
+            # Debug, not info: this response goes wherever the collector's own
+            # logs go, and repeating whole API payloads there is noise at best.
+            logging.debug("Tenant response: %s" % (tenant_response))
             return json.loads(tenant_response)
 
         except json.decoder.JSONDecodeError as e:

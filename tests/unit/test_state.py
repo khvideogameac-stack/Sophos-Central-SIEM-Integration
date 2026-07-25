@@ -41,17 +41,8 @@ class TestState(unittest.TestCase):
     def test_init(self):
         path = Path("/tmp/state/")
         self.assertEqual(self.state.state_file, "/tmp/state/test_siem_sophos.json")
-        self.assertEquals(path.parent.is_dir(), True)
+        self.assertEqual(path.parent.is_dir(), True)
         self.assertEqual(self.state.state_data, {})
-
-    @mock.patch("state.State.get_state_file")
-    @mock.patch("state.State.create_state_dir")
-    @mock.patch("state.State.load_state_file")
-    @mock.patch("sys.stderr.write")
-    def test_log(self, mock_sys_write, mock_load_file, mock_state_dir, mock_state_file):
-        self.state.log("test")
-        mock_sys_write.assert_called_once()
-        mock_sys_write.assert_called_with("test\n")
 
     @mock.patch("state.State.create_state_dir")
     @mock.patch("state.State.load_state_file")
@@ -63,13 +54,16 @@ class TestState(unittest.TestCase):
 
     @mock.patch("state.State.get_state_file")
     @mock.patch("state.State.create_state_dir")
-    @mock.patch("sys.stderr.write")
+    @mock.patch("state.logging.info")
     def test_load_state_file_io_exception(
-        self, mock_sys_write, mock_load_file, mock_state_dir
+        self, mock_logging_info, mock_load_file, mock_state_dir
     ):
-        self.state.state_file = "/tmp/test.json"
-        self.state.load_state_file()
-        mock_sys_write.assert_called_with("Sophos state file not found\n")
+        # A missing state file is normal on a first run, so it logs and returns
+        # an empty dict rather than failing.
+        self.state.state_file = "/tmp/does_not_exist_test.json"
+        self.assertEqual(self.state.load_state_file(), {})
+        mock_logging_info.assert_called_once()
+        self.assertIn("state file not found", mock_logging_info.call_args[0][0])
 
     def test_save_state(self):
         self.state.save_state("test.test_account", "test_account")

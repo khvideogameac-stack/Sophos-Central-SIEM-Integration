@@ -1,0 +1,4 @@
+# Test dependencies. The collector itself runs on the standard library only,
+# so there is deliberately no requirements.txt for runtime.
+pytest>=7.0
+mock>=4.0

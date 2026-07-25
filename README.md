@@ -7,7 +7,22 @@
 
 This repository contains a script package to export event and alert data from Sophos Central into a SIEM solution.
 
-Any issue discovered using the script should be reported to Sophos Support.
+### Wazuh
+
+This fork adds first-class Wazuh support on top of the upstream Sophos script:
+
+* a `wazuh` output format that shapes events for Wazuh's JSON decoder, so the
+  client IP and account land in fields Wazuh promotes to static fields (GeoIP,
+  `<srcip>` and `<user>` matching)
+* a ruleset in [`wazuh/rules/`](wazuh/rules/) covering threat detections, DLP,
+  policy violations, the alert stream and outbreak correlation
+* an `ossec.conf` snippet, sample events, and a validator for the rule files
+
+**Start here: [docs/wazuh.md](docs/wazuh.md)** for end-to-end setup, and
+[wazuh/README.md](wazuh/README.md) for the rules themselves.
+
+Note that issues with the Wazuh-specific additions belong in this fork's issue
+tracker, not with Sophos Support.
 
 
 ### SIEM
@@ -98,6 +113,28 @@ Run `python siem.py` and you should see the results as specified in the config f
 | -d, --debug | Print debug logs |
 | -v, --version | Print version |
 | -q, --quiet | Suppress status messages. No output would be printed by `siem.py` |
+
+### Exit codes
+
+`siem.py` returns a meaningful exit code so a scheduler can distinguish a
+failed collection from an idle one. See [exit_codes.py](exit_codes.py).
+
+| Code | Meaning |
+| ---- | ------- |
+| 0 | Success, including "no new events" |
+| 1 | Config missing or invalid |
+| 2 | Credentials rejected, or tenant could not be resolved |
+| 3 | Could not reach the Sophos API or the syslog target |
+| 4 | State file unusable, needs an operator |
+| 5 | Another run holds the lock (not an error) |
+
+### Running the tests
+
+```
+pip install -r requirements-dev.txt
+python -m pytest tests/
+python tools/validate_wazuh_rules.py
+```
 
 
 ### License

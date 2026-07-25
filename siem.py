@@ -25,6 +25,7 @@ import name_mapping
 import config
 import api_client
 import vercheck
+import exit_codes
 
 VERSION = "2.1.0"
 QUIET = False
@@ -45,6 +46,53 @@ CEF_FORMAT = (
     "CEF:%(version)s|%(device_vendor)s|%(device_product)s|"
     "%(device_version)s|%(device_event_class_id)s|%(name)s|%(severity)s|"
 )
+
+
+# --- Wazuh output format -----------------------------------------------------
+#
+# Wazuh's JSON decoder turns every top-level key into a dynamic field reachable
+# as data.<key>, but a fixed set of key names is promoted into Wazuh's static
+# fields instead. Those get first-class treatment: dedicated rule options
+# (<srcip>, <user>, <url>...), GeoIP enrichment on the IP fields, and variable
+# substitution in active response. Sophos buries the two most useful values -
+# the client IP and the account - where that cannot happen, so the wazuh format
+# copies them up to the top level under the names Wazuh recognises.
+#
+# Copies rather than moves, so the original Sophos field paths still resolve for
+# anything already built against them.
+#
+# The promoted-name list has shifted between Wazuh minor versions; if a field is
+# not enriching as expected, confirm against your version's decoder before
+# assuming this mapping is wrong.
+WAZUH_PROMOTED_FIELDS = {
+    # dotted path in the Sophos event: Wazuh static field name
+    "source_info.ip": "srcip",
+    "source": "dstuser",  # dstuser is what the <user> rule option matches
+}
+
+# Wazuh static fields hold scalars. If Sophos sends one of these names carrying
+# an object or a list - alert payloads can carry a top-level "data" object - the
+# decode is unreliable, so those get moved aside under a sophos_ prefix.
+WAZUH_RESERVED_KEYS = frozenset(
+    [
+        "data",
+        "extra_data",
+        "status",
+        "action",
+        "protocol",
+        "url",
+        "id",
+        "srcip",
+        "dstip",
+        "srcport",
+        "dstport",
+        "srcuser",
+        "dstuser",
+        "system_name",
+    ]
+)
+
+WAZUH_INTEGRATION_NAME = "sophos-central"
 
 
 CEF_MAPPING = {
@@ -91,6 +139,73 @@ def write_json_format(results, config):
         update_cef_keys(i, config)
         name_mapping.update_fields(log, i)
         SIEM_LOGGER.info(json.dumps(i, ensure_ascii=False).strip())
+
+
+def resolve_dotted(data, path):
+    """Look up a possibly nested value by dotted path.
+    Arguments:
+        data {dict}: event
+        path {string}: e.g. "source_info.ip"
+    Returns:
+        value or None if any segment is missing
+    """
+    current = data
+    for part in path.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return None
+        current = current[part]
+    return current
+
+
+def promote_wazuh_fields(data):
+    """Shape a Sophos event for Wazuh's JSON decoder.
+    Copies the fields Wazuh promotes to static fields up to the top level,
+    moves aside top-level keys that would collide with a static field, and adds
+    the markers rules key on.
+    Arguments:
+        data {dict}: event
+    Returns:
+        dict -- event ready to serialise
+    """
+    out = {}
+    for key, value in data.items():
+        if key in WAZUH_RESERVED_KEYS and isinstance(value, (dict, list)):
+            out["sophos_" + key] = value
+        else:
+            out[key] = value
+
+    for source_path, wazuh_field in WAZUH_PROMOTED_FIELDS.items():
+        value = resolve_dotted(data, source_path)
+        # Only scalars belong in a static field, and never clobber a value the
+        # event already supplied under the promoted name.
+        if value is None or isinstance(value, (dict, list)):
+            continue
+        if out.get(wazuh_field) in (None, ""):
+            out[wazuh_field] = value
+
+    # Lets every rule hang off one cheap base condition.
+    out["integration"] = WAZUH_INTEGRATION_NAME
+
+    # Numeric severity so rules and dashboards can compare ranges instead of
+    # matching five separate strings.
+    if "severity" in out:
+        out["severity_num"] = map_severity(out["severity"])
+
+    return out
+
+
+def write_wazuh_format(results, config):
+    """Write one JSON object per line, shaped for Wazuh ingestion.
+    Read on the Wazuh side with <log_format>json</log_format>.
+    Arguments:
+        results {list}: data
+    """
+    for i in results:
+        i = remove_null_values(i)
+        name_mapping.update_fields(log, i)
+        SIEM_LOGGER.info(
+            json.dumps(promote_wazuh_fields(i), ensure_ascii=False).strip()
+        )
 
 
 def write_keyvalue_format(results, config):
@@ -358,8 +473,10 @@ def load_config(config_path):
     return cfg
 
 def validate_format(format):
-    if format not in ("json", "keyvalue", "cef"):
-        raise Exception("Invalid format in config.ini, format can be json, cef or keyvalue")
+    if format not in ("json", "keyvalue", "cef", "wazuh"):
+        raise Exception(
+            "Invalid format in config.ini, format can be json, cef, keyvalue or wazuh"
+        )
 
 def validate_endpoint(endpoint):
     endpoint_map = api_client.ENDPOINT_MAP
@@ -379,6 +496,8 @@ def get_alerts_or_events(endpoint, options, config, state):
     
     if config.format == "json":
         write_json_format(results, config)
+    elif config.format == "wazuh":
+        write_wazuh_format(results, config)
     elif config.format == "keyvalue":
         write_keyvalue_format(results, config)
     elif config.format == "cef":
@@ -409,19 +528,41 @@ def main():
     options = parse_args_options()
 
     logging.Formatter.formatTime = (lambda self, record, datefmt=None: datetime.datetime.fromtimestamp(record.created, datetime.timezone.utc).astimezone().isoformat(sep="T",timespec="milliseconds"))
-  
 
+    try:
+        config_data = load_config(options.config)
+    except Exception as e:
+        logging.critical("Could not load %s: %s" % (options.config, e))
+        return exit_codes.CONFIG_ERROR
 
-    config_data = load_config(options.config)
     logging.info("Logging Level is set as: "+config_data.logging_level)
     logger = logging.getLogger()
     logger.setLevel(config_data.logging_level)
     if (logger.level <= logging.DEBUG):
         logger.handlers[0].setFormatter(logging.Formatter(logging_config.DEBUG_FORMAT))
-       
+
     state_data = state.State(options, config_data.state_file_path)
-    run(options, config_data, state_data)
+
+    # Serialise runs against this state file. A run that overruns its schedule
+    # would otherwise have the next one racing it for the cursor.
+    lock = state.RunLock(state_data.get_lock_file())
+    if not lock.acquire():
+        logging.warning(
+            "Another collector run holds %s, exiting without collecting"
+            % state_data.get_lock_file()
+        )
+        return exit_codes.ALREADY_RUNNING
+
+    try:
+        run(options, config_data, state_data)
+    except api_client.SophosApiError as e:
+        logging.critical("Collection failed: %s" % e)
+        return exit_codes.TRANSPORT_ERROR
+    finally:
+        lock.release()
+
+    return exit_codes.OK
+
 
 if __name__ == "__main__":
-    main()
-    
+    sys.exit(main())

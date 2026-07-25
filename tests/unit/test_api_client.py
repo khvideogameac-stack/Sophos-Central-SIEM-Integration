@@ -20,6 +20,7 @@
 import os
 import shutil
 import api_client
+import exit_codes
 import sys
 import unittest
 import json
@@ -78,12 +79,6 @@ class TestApiClient(unittest.TestCase):
         if os.path.exists("fake_sophos_siem_home/log"):
             shutil.rmtree("fake_sophos_siem_home")
 
-    @patch("sys.stderr.write")
-    def test_log(self, mock_sys_write):
-        self.api_client.log("test")
-        mock_sys_write.assert_called_once()
-        mock_sys_write.assert_called_with("test\n")
-
     def test_get_syslog_facilities(self):
         result = self.api_client.get_syslog_facilities()
         self.assertIn("auth", result)
@@ -128,9 +123,9 @@ class TestApiClient(unittest.TestCase):
         self.assertEqual(response["next_cursor"], mock_event_response["next_cursor"])
         self.assertEqual(len(response["items"]), 0)
 
-    @patch("sys.stderr.write")
+    @patch("api_client.logging.critical")
     @patch("api_client.urlrequest.Request")
-    def test_get_alerts_or_events_with_credentials(self, mock_urlrequest, sys_write):
+    def test_get_alerts_or_events_with_credentials(self, mock_urlrequest, mock_critical):
         mock_event_response = {
             "has_more": False,
             "next_cursor": "TESJfQ1VSU09SfDITESTETSTETtMDFUMTg6MjU6NDEuNjA2Wg==",
@@ -155,9 +150,13 @@ class TestApiClient(unittest.TestCase):
         self.assertEqual(len(response["items"]), 0)
         self.api_client.get_tenants_from_sophos.return_value = {"error": "error"}
 
-        with self.assertRaises(Exception) as context:
+        # An unresolvable tenant must exit non-zero, otherwise cron and the
+        # Wazuh side cannot tell a failed collection from an idle one.
+        with self.assertRaises(SystemExit) as context:
             self.api_client.get_alerts_or_events()
-        sys_write.assert_called_with("Error :: error\n")
+        self.assertEqual(context.exception.code, exit_codes.AUTH_ERROR)
+        self.assertNotEqual(context.exception.code, 0)
+        mock_critical.assert_called_with("error")
 
     @patch("api_client.urlrequest.Request")
     def test_call_endpoint(self, mock_urlrequest):

@@ -1,0 +1,33 @@
+<!--
+  Merge this <localfile> block into the <ossec_config> section of
+  /var/ossec/etc/ossec.conf on whichever host runs siem.py - the Wazuh manager
+  itself, or a Wazuh agent if you run the collector elsewhere. logcollector
+  runs on both.
+
+  Adjust <location> to match SOPHOS_SIEM_HOME and the `filename` set in
+  config.ini. The path below assumes the collector lives in
+  /opt/sophos-siem and config.ini has `filename = sophos_central.json`.
+
+  log_format json makes Wazuh parse each line into data.* fields with no
+  decoder needed, and puts the raw line in full_log.
+-->
+<ossec_config>
+
+  <localfile>
+    <log_format>json</log_format>
+    <location>/opt/sophos-siem/log/sophos_central.json</location>
+  </localfile>
+
+  <!--
+    If you rotate the output file (max_log_file_size_mb in config.ini),
+    logcollector follows the rename automatically. Nothing extra needed.
+
+    If you instead run several tenants into separate files, a wildcard works:
+
+    <localfile>
+      <log_format>json</log_format>
+      <location>/opt/sophos-siem/log/sophos_*.json</location>
+    </localfile>
+  -->
+
+</ossec_config>

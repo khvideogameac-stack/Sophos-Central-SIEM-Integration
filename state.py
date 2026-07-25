@@ -14,8 +14,70 @@
 import sys
 import os
 import json
+import tempfile
 from pathlib import Path
 import logging
+import exit_codes
+
+try:
+    import fcntl
+except ImportError:  # Windows
+    fcntl = None
+
+
+class RunLock:
+    """An advisory lock ensuring only one collector runs against a state file.
+
+    Overlapping runs - a slow run still paginating when cron starts the next
+    one - race on the cursor, which duplicates events downstream and can move
+    the cursor backwards. Held for the lifetime of the process; the lock is
+    released by the OS if we are killed.
+    """
+
+    def __init__(self, lock_file):
+        self.lock_file = lock_file
+        self.handle = None
+
+    def acquire(self):
+        """Take the lock.
+        Returns:
+            bool -- True if acquired, False if another run holds it
+        """
+        if fcntl is None:
+            logging.debug("File locking unavailable on this platform, skipping run lock")
+            return True
+        try:
+            self.handle = open(self.lock_file, "w")
+            fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.handle.write(str(os.getpid()))
+            self.handle.flush()
+            return True
+        except (IOError, OSError):
+            if self.handle:
+                self.handle.close()
+                self.handle = None
+            return False
+
+    def release(self):
+        """Release the lock and remove the lock file."""
+        if self.handle is None:
+            return
+        try:
+            fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
+            self.handle.close()
+            os.unlink(self.lock_file)
+        except (IOError, OSError):
+            pass
+        finally:
+            self.handle = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.release()
+        return False
+
 
 class State:
     def __init__(self, options, state_file):
@@ -35,6 +97,13 @@ class State:
         self.create_state_dir(self.state_file)
         self.state_data = self.load_state_file()
 
+    def get_lock_file(self):
+        """Path of the run lock guarding this state file
+        Returns:
+            string -- lock file path
+        """
+        return self.state_file + ".lock"
+
   
     def create_state_dir(self, state_file):
         """Create state directory
@@ -46,7 +115,8 @@ class State:
             try:
                 os.makedirs(state_dir)
             except OSError as e:
-                raise SystemExit("Failed to create %s, %s" % (state_dir, str(e)))
+                logging.critical("Failed to create %s, %s" % (state_dir, str(e)))
+                raise SystemExit(exit_codes.STATE_ERROR)
 
     def get_state_file(self, app_path, state_file):
         """Return state cache file path
@@ -76,8 +146,12 @@ class State:
         except IOError:
             logging.info(f"Sophos state file not found; Reinitialize Communication; state file={self.state_file} ")
         except json.decoder.JSONDecodeError:
-            logging.error("Sophos state file not in valid JSON format")
-            raise SystemExit()
+            logging.critical(
+                "Sophos state file %s is not valid JSON. Move it aside to restart "
+                "collection, note this re-fetches the last 12 hours and will "
+                "duplicate events downstream." % self.state_file
+            )
+            raise SystemExit(exit_codes.STATE_ERROR)
         return {}
 
     def save_state(self, state_data_key, state_data_value):
@@ -98,13 +172,30 @@ class State:
         self.write_state_file(json.dumps(self.state_data, indent=4))
 
     def write_state_file(self, data):
-        """Write data in state file
+        """Write data in state file, atomically.
+        Writing in place truncates the file first, so a crash mid-write leaves a
+        corrupt state file that the next run refuses to load. Writing to a
+        temporary file in the same directory and renaming makes the replacement
+        atomic: the state file is always either the old content or the new.
         Arguments:
             data {dict}: state data object
         """
-        with open(self.state_file, "w") as f:
-            try:
+        state_dir = os.path.dirname(self.state_file) or "."
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            dir=state_dir, prefix=".siem_state_", suffix=".tmp"
+        )
+        try:
+            with os.fdopen(tmp_fd, "w") as f:
                 f.write(data)
-            except Exception as e:
-                logging.error(e)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, self.state_file)
+        except Exception as e:
+            # Failing to persist the cursor means the next run re-fetches this
+            # page, so it must be loud rather than swallowed.
+            logging.error("Failed to write state file %s: %s" % (self.state_file, e))
+            try:
+                os.unlink(tmp_path)
+            except OSError:
                 pass
+            raise

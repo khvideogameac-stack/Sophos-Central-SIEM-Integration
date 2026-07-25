@@ -19,11 +19,22 @@
 """
 
 import os
+import sys
 import siem
 import unittest
 
 from mock import MagicMock
 from mock import patch
+
+
+class FakeConfig:
+    """Minimal stand-in for the config object the write_* helpers take."""
+
+    def __init__(self, **kwargs):
+        self.convert_dhost_field_to_valid_fqdn = "true"
+        self.format = "json"
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
 
 class TestSiem(unittest.TestCase):
@@ -33,6 +44,7 @@ class TestSiem(unittest.TestCase):
     def setUp(self):
         self.LOGGER_MOCK = MagicMock()
         siem.SIEM_LOGGER = self.LOGGER_MOCK
+        self.config = FakeConfig()
 
     @patch("name_mapping.update_fields")
     def test_write_json_format(self, mock_update_fields):
@@ -40,7 +52,7 @@ class TestSiem(unittest.TestCase):
         results = [{"key": "value"}]
 
         # Run
-        siem.write_json_format(results)
+        siem.write_json_format(results, self.config)
 
         # Verify
         self.assertEqual(mock_update_fields.call_count, 1)
@@ -54,7 +66,7 @@ class TestSiem(unittest.TestCase):
         results = [{"rt": "date"}]
 
         # Run
-        siem.write_keyvalue_format(results)
+        siem.write_keyvalue_format(results, self.config)
 
         # Verify
         self.assertEqual(mock_update_fields.call_count, 1)
@@ -68,7 +80,7 @@ class TestSiem(unittest.TestCase):
         results = [{"key": "value"}]
 
         # Run
-        siem.write_cef_format(results)
+        siem.write_cef_format(results, self.config)
 
         # Verify
         self.assertEqual(mock_update_fields.call_count, 1)
@@ -108,12 +120,12 @@ class TestSiem(unittest.TestCase):
     def test_update_cef_keys(self):
         same_key_value_data = {"name": "test_name"}
         different_key_value_data = {"device_event_class_id": "test_type"}
-        siem.update_cef_keys(same_key_value_data)
+        siem.update_cef_keys(same_key_value_data, self.config)
         self.assertEqual(same_key_value_data, {"name": "test_name"})
-        siem.update_cef_keys(different_key_value_data)
+        siem.update_cef_keys(different_key_value_data, self.config)
         self.assertEqual(different_key_value_data, {"type": "test_type"})
         invalid_host_key_value_data = {"location": "John's MacBook"}
-        siem.update_cef_keys(invalid_host_key_value_data)
+        siem.update_cef_keys(invalid_host_key_value_data, self.config)
         self.assertEqual(invalid_host_key_value_data, {"dhost": "john-s-macbook"})
 
     def test_format_cef(self):
@@ -123,14 +135,17 @@ class TestSiem(unittest.TestCase):
             "source": "suser",
             "when": "end",
         }
-        result = siem.format_cef(data)
+        result = siem.format_cef(data, self.config)
         self.assertEqual(
             result,
             "CEF:0|sophos|sophos central|1.0|NA|NA|8|type=Event::TestEndpoint::TestSuccess suser=suser end=end",
         )
 
     def test_parse_args_options(self):
-        options = siem.parse_args_options()
+        # parse_args_options reads sys.argv, which under a test runner carries
+        # the runner's own flags (pytest -q made this assert quiet was True).
+        with patch.object(sys, "argv", ["siem.py"]):
+            options = siem.parse_args_options()
         self.assertEqual(options.since, False)
         self.assertEqual(options.quiet, False)
         self.assertEqual(options.version, False)
@@ -191,9 +206,13 @@ class TestSiem(unittest.TestCase):
         with self.assertRaises(Exception) as context:
             siem.validate_format("test")
         self.assertTrue(
-            "Invalid format in config.ini, format can be json, cef or keyvalue"
+            "Invalid format in config.ini, format can be json, cef, keyvalue or wazuh"
             in str(context.exception)
         )
+
+    def test_validate_format_accepts_all_supported(self):
+        for fmt in ("json", "keyvalue", "cef", "wazuh"):
+            siem.validate_format(fmt)
 
     def test_validate_endpoint(self):
         with self.assertRaises(Exception) as context:

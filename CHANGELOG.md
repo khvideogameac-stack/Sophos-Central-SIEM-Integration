@@ -1,3 +1,56 @@
+# Unreleased (Wazuh integration)
+
+Fork changes on top of upstream v2.1.0.
+
+### Wazuh support
+
+* New `format = wazuh` output, shaping events for Wazuh's JSON decoder: copies
+  `source_info.ip` to `srcip` and `source` to `dstuser` so Wazuh promotes them
+  to static fields (GeoIP, `<srcip>` and `<user>` matching), adds an
+  `integration` marker and a numeric `severity_num`, and moves aside top-level
+  keys that would collide with a Wazuh static field while carrying an object.
+* Wazuh ruleset in `wazuh/rules/` (ids 100200-100292): threat detections, DLP,
+  policy violations, the alert stream, and outbreak/worm correlation.
+* `ossec.conf` snippet, sample events, and `tools/validate_wazuh_rules.py`.
+* Setup guide in `docs/wazuh.md`.
+
+### Reliability
+
+* Failure paths now exit non-zero. A bare `raise SystemExit()` exits with 0, so
+  a failed collection was indistinguishable from a successful one to cron or a
+  Wazuh command wodle. Exit codes are defined in `exit_codes.py`.
+* `request_url` no longer returns `None` after exhausting its retries, which
+  surfaced as a `TypeError` in `json.loads` several frames away.
+* Connection-level failures (DNS, refused connection, TLS timeout) are now
+  retried. Previously only `HTTPError` was caught, so a network blip killed the
+  run outright.
+* Retries use exponential backoff with jitter and honour `Retry-After`.
+* Page responses are validated before use, replacing a bare `KeyError` on
+  `next_cursor` when the API returns an error body.
+* State file writes are atomic, so a crash mid-write can no longer leave a
+  truncated file that blocks every subsequent run.
+* An advisory run lock prevents overlapping runs from racing the cursor.
+* Configurable request timeout, so a hung connection cannot stall the schedule.
+
+### Operations
+
+* Optional output file rotation (`max_log_file_size_mb`), preventing unbounded
+  growth of a file a log collector is tailing.
+* Secrets can come from `SOPHOS_CLIENT_ID`, `SOPHOS_CLIENT_SECRET` and
+  `SOPHOS_TENANT_ID`, which take precedence over `config.ini`.
+* All config options now have defaults, so an older `config.ini` no longer
+  breaks on upgrade.
+* Sample config defaults to `logging_level = INFO`; `DEBUG` logs full API
+  responses. Tenant API responses demoted from info to debug.
+* `datetime.utcnow()` replaced ahead of its removal.
+
+### Tests
+
+* Fixed 10 tests that were failing on arrival against the current signatures.
+* Added coverage for the wazuh format, retry behaviour, atomic state writes,
+  the run lock, and exit codes.
+* GitHub Actions running the suite on Python 3.9-3.13 plus rule validation.
+
 # v2.1.0
 
 This release contains the following fixes:
