@@ -52,7 +52,25 @@ def validate_xml_parses(paths, errors):
     return trees
 
 
-def validate_rules(tree, path, errors):
+def collect_rule_ids(trees):
+    """Every rule id defined across all rule files.
+
+    Wazuh loads the whole rules directory as one ruleset, so a rule in the
+    overrides file may legitimately chain off a parent in the main file.
+    Checking references per file would flag that as dangling.
+    """
+    defined = set()
+    for path, tree in trees.items():
+        if os.sep + "rules" + os.sep not in path:
+            continue
+        for rule in tree.getroot().iter("rule"):
+            rule_id = rule.get("id")
+            if rule_id and rule_id.isdigit():
+                defined.add(int(rule_id))
+    return defined
+
+
+def validate_rules(tree, path, errors, defined_globally):
     """Check ids, levels and if_sid references in a rule file."""
     root = tree.getroot()
     rules = list(root.iter("rule"))
@@ -83,13 +101,12 @@ def validate_rules(tree, path, errors):
     if duplicates:
         fail(errors, "%s: duplicate rule ids %s" % (path, duplicates))
 
-    # Every chained rule must reference a parent that exists in this file,
-    # otherwise the rule silently never fires.
-    defined = set(ids)
+    # Every chained rule must reference a parent defined somewhere in the
+    # ruleset, otherwise the rule silently never fires.
     for rule in rules:
         for tag in ("if_sid", "if_matched_sid"):
             for ref in rule.findall(tag):
-                if ref.text and int(ref.text.strip()) not in defined:
+                if ref.text and int(ref.text.strip()) not in defined_globally:
                     fail(
                         errors,
                         "%s: rule %s references unknown %s %s"
@@ -123,16 +140,23 @@ def validate_samples(path, errors):
 
 def main():
     errors = []
+    # .xml.sample too: a sample that does not parse is worse than no sample,
+    # because it fails only once someone installs it on a manager. A stray '--'
+    # inside an XML comment is the usual way that happens.
     xml_paths = sorted(
         glob.glob(os.path.join(REPO_ROOT, "wazuh", "**", "*.xml"), recursive=True)
+        + glob.glob(
+            os.path.join(REPO_ROOT, "wazuh", "**", "*.xml.sample"), recursive=True
+        )
     )
     if not xml_paths:
         fail(errors, "no XML files found under wazuh/")
 
     trees = validate_xml_parses(xml_paths, errors)
+    defined_globally = collect_rule_ids(trees)
     for path, tree in trees.items():
         if os.sep + "rules" + os.sep in path:
-            validate_rules(tree, path, errors)
+            validate_rules(tree, path, errors, defined_globally)
 
     validate_samples(
         os.path.join(REPO_ROOT, "wazuh", "samples", "sample_events.jsonl"), errors

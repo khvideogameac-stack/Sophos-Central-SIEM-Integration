@@ -7,9 +7,9 @@
 
   Setting level 0 stops an alert being generated, but the event is still
   decoded and still written to the archives if you have archiving enabled. So
-  unlike `siem.py --light`, which drops events at the API and loses them
-  permanently, everything here remains recoverable after an incident. That is
-  the reason to tune noise here rather than at the collector.
+  unlike the collector's light mode, which drops events at the API and loses
+  them permanently, everything here remains recoverable after an incident.
+  That is the reason to tune noise here rather than at the collector.
 
   Measured against one day of a real tenant, these four types were 174 of 266
   events - about 65% of the volume, and none of it actionable:
