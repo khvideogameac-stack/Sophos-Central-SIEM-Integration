@@ -180,6 +180,42 @@
     <group>sophos_compliance,</group>
   </rule>
 
+  <!-- Routine maintenance: the product working normally. Given its own rule
+       rather than left on the severity fallback so it can be grouped and
+       suppressed without touching anything else. -->
+  <rule id="100235" level="3">
+    <if_sid>100200</if_sid>
+    <field name="type">^Event::Endpoint::UpdateSuccess$|^Event::Endpoint::SavScanComplete$</field>
+    <description>Sophos: $(name) [$(location)]</description>
+    <group>sophos_compliance,</group>
+  </rule>
+
+  <!-- Device control blocked a peripheral, typically removable storage.
+       The block already happened, so this is not urgent, but it is the
+       trace left by an attempt to move data onto or off a machine and it
+       should not be buried in the generic fallback. -->
+  <rule id="100236" level="5">
+    <if_sid>100200</if_sid>
+    <field name="type">^Event::Endpoint::Device::Blocked$</field>
+    <description>Sophos device blocked: $(name) [$(location)]</description>
+    <group>sophos_device,</group>
+    <mitre>
+      <id>T1200</id>
+    </mitre>
+  </rule>
+
+  <!-- Device control in monitor-only mode: the device was NOT blocked, it
+       was merely recorded. Worth more attention than a block, not less. -->
+  <rule id="100237" level="6">
+    <if_sid>100200</if_sid>
+    <field name="type">^Event::Endpoint::Device::AlertedOnly$</field>
+    <description>Sophos device allowed (alert only): $(name) [$(location)]</description>
+    <group>sophos_device,</group>
+    <mitre>
+      <id>T1200</id>
+    </mitre>
+  </rule>
+
   <!-- ===============================================================
        Alerts. The alert stream is Sophos telling you something needs
        action, so it outranks the equivalent event. Note these are the

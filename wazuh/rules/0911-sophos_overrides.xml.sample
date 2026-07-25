@@ -38,7 +38,7 @@
   </rule>
 
   <!-- Successful updates and completed scans: the system working normally. -->
-  <rule id="100235" level="0">
+  <rule id="100235" level="0" overwrite="yes">
     <if_sid>100200</if_sid>
     <field name="type">^Event::Endpoint::UpdateSuccess$|^Event::Endpoint::SavScanComplete$</field>
     <description>Sophos: routine maintenance event (suppressed)</description>

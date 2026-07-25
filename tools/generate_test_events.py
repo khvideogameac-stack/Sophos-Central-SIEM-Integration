@@ -232,6 +232,36 @@ CORE_SCENARIOS = [
         "UPDATING",
         100234,
     ),
+    scenario(
+        "Event::Endpoint::Device::Blocked",
+        "low",
+        "TEST-WKS-18",
+        TEST_NET_1 + "38",
+        "testuser18@example.com",
+        "Peripheral blocked: SanDisk Cruzer USB",
+        "PERIPHERALS",
+        100236,
+    ),
+    scenario(
+        "Event::Endpoint::Device::AlertedOnly",
+        "low",
+        "TEST-WKS-19",
+        TEST_NET_1 + "39",
+        "testuser19@example.com",
+        "Peripheral allowed: Kingston DataTraveler USB",
+        "PERIPHERALS",
+        100237,
+    ),
+    scenario(
+        "Event::Endpoint::UpdateSuccess",
+        "low",
+        "TEST-WKS-20",
+        TEST_NET_1 + "40",
+        "testuser20@example.com",
+        "Update succeeded",
+        "UPDATING",
+        100235,
+    ),
 ]
 
 SCENARIOS = SCENARIOS + CORE_SCENARIOS
@@ -249,6 +279,9 @@ RULE_DESCRIPTIONS = {
     100217: "detection dismissed (level 5)",
     100233: "application blocked (level 5)",
     100234: "reboot required to complete update (level 3)",
+    100235: "routine maintenance (level 3)",
+    100236: "device/USB blocked (level 5)",
+    100237: "device allowed, alert only (level 6)",
 }
 
 
