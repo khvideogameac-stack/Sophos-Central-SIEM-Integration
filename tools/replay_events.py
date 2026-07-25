@@ -118,6 +118,18 @@ def main():
         help="do not replay synthetic events (default)",
     )
     parser.add_argument(
+        "--allow-duplicates",
+        action="store_true",
+        help="replay every matching line, including events already replayed. "
+        "By default each Sophos event id is replayed once, so running this "
+        "tool repeatedly does not multiply the alerts each time.",
+    )
+    parser.add_argument(
+        "--output",
+        metavar="FILE",
+        help="append to FILE instead of the input file",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="report what would be replayed and exit",
@@ -139,11 +151,23 @@ def main():
     wanted = set(args.types or []) | set(PRESETS.get(args.preset, []))
 
     selected = []
+    seen_ids = set()
+    duplicates = 0
     for line, event in events:
         if args.skip_test_events and event.get("test_event"):
             continue
-        if args.all or event.get("type") in wanted:
-            selected.append(line)
+        if not (args.all or event.get("type") in wanted):
+            continue
+        # A previous replay left its events in this same file, so without
+        # this the selection grows every run: 72 events become 144, then 288.
+        # Deduplicating on the Sophos event id makes a replay idempotent.
+        if not args.allow_duplicates:
+            key = event.get("id") or line
+            if key in seen_ids:
+                duplicates += 1
+                continue
+            seen_ids.add(key)
+        selected.append(line)
 
     if not selected:
         print("\nNothing matched. Types present in the file:")
@@ -153,23 +177,29 @@ def main():
         return 1
 
     counts = collections.Counter(json.loads(l).get("type") for l in selected)
-    print("\nWould replay %s events:" % len(selected))
+    print("\nWould replay %s unique events:" % len(selected))
     for t, n in counts.most_common():
         print("  %5d  %s" % (n, t))
+    if duplicates:
+        print(
+            "\n  (%s already-replayed copies skipped, use --allow-duplicates "
+            "to include them)" % duplicates
+        )
 
     if args.dry_run:
         print("\nDry run, nothing written.")
         return 0
 
+    target = args.output or args.file
     # Append rather than rewrite: replacing the file changes its inode and
     # logcollector would keep reading the old one.
-    with open(args.file, "a", encoding="utf-8") as f:
+    with open(target, "a", encoding="utf-8") as f:
         for line in selected:
             f.write(line + "\n")
         f.flush()
         os.fsync(f.fileno())
 
-    print("\nAppended %s events to %s" % (len(selected), args.file))
+    print("\nAppended %s events to %s" % (len(selected), target))
     print("Wazuh should produce new alerts within a few seconds.")
     print("Confirm the rules were reloaded first, or they will be scored the")
     print("same wrong way again:")
