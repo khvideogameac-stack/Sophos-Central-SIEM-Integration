@@ -47,7 +47,7 @@
   <rule id="100212" level="13">
     <if_sid>100200</if_sid>
     <field name="type">Threat::\.*CleanupFailed$|Core\.*CleanFailed$</field>
-    <description>Sophos: malware cleanup FAILED - $(name) on $(location)</description>
+    <description>Sophos malware CLEANUP FAILED: $(name) [$(location)]</description>
     <group>malware,sophos_threat,</group>
     <mitre>
       <id>T1204</id>
@@ -57,7 +57,7 @@
   <rule id="100214" level="12">
     <if_sid>100200</if_sid>
     <field name="type">Threat::CommandAndControl</field>
-    <description>Sophos: command and control traffic - $(name) on $(location)</description>
+    <description>Sophos C2: $(name) [$(location)]</description>
     <group>malware,sophos_threat,</group>
     <mitre>
       <id>T1071</id>
@@ -67,7 +67,7 @@
   <rule id="100210" level="12">
     <if_sid>100200</if_sid>
     <field name="type">^Event::Endpoint::Threat::Detected$|^Event::Endpoint::CoreDetection$</field>
-    <description>Sophos: malware detected - $(name) on $(location)</description>
+    <description>Sophos malware: $(name) [$(location)]</description>
     <group>malware,sophos_threat,</group>
     <mitre>
       <id>T1204</id>
@@ -81,7 +81,7 @@
   <rule id="100216" level="13">
     <if_sid>100210</if_sid>
     <field name="datastream">^alert$</field>
-    <description>Sophos: malware ALERT - $(name) on $(location)</description>
+    <description>Sophos malware ALERT: $(name) [$(location)]</description>
     <group>malware,sophos_threat,sophos_alert,</group>
     <mitre>
       <id>T1204</id>
@@ -91,7 +91,7 @@
   <rule id="100213" level="10">
     <if_sid>100200</if_sid>
     <field name="type">^Event::Endpoint::Threat::PuaDetected$|^Event::Endpoint::CorePuaDetection$</field>
-    <description>Sophos: potentially unwanted application - $(name) on $(location)</description>
+    <description>Sophos PUA: $(name) [$(location)]</description>
     <group>malware,sophos_threat,</group>
   </rule>
 
@@ -99,14 +99,14 @@
   <rule id="100215" level="9">
     <if_sid>100200</if_sid>
     <field name="type">Threat::HIPSDismissed$</field>
-    <description>Sophos: HIPS detection dismissed - $(name) on $(location)</description>
+    <description>Sophos HIPS dismissed: $(name) [$(location)]</description>
     <group>sophos_threat,</group>
   </rule>
 
   <rule id="100211" level="6">
     <if_sid>100200</if_sid>
     <field name="type">^Event::Endpoint::Threat::CleanedUp$|^Event::Endpoint::CorePuaClean$|^Event::Endpoint::CoreClean$</field>
-    <description>Sophos: malware cleaned up - $(name) on $(location)</description>
+    <description>Sophos malware cleaned: $(name) [$(location)]</description>
     <group>malware,sophos_threat,</group>
   </rule>
 
@@ -117,7 +117,7 @@
   <rule id="100217" level="5">
     <if_sid>100200</if_sid>
     <field name="type">^Event::Endpoint::CoreDismissed$</field>
-    <description>Sophos: detection dismissed - $(name) on $(location)</description>
+    <description>Sophos detection dismissed: $(name) [$(location)]</description>
     <group>sophos_threat,</group>
   </rule>
 
@@ -128,7 +128,7 @@
   <rule id="100220" level="8">
     <if_sid>100200</if_sid>
     <field name="type">^Event::Endpoint::DataLossPreventionUserAllowed$</field>
-    <description>Sophos DLP: user allowed transfer - $(name) on $(location)</description>
+    <description>Sophos DLP: $(name) [$(location)]</description>
     <group>sophos_dlp,</group>
     <mitre>
       <id>T1567</id>
@@ -142,21 +142,21 @@
   <rule id="100230" level="4">
     <if_sid>100200</if_sid>
     <field name="type">^Event::Endpoint::WebControlViolation$|^Event::Endpoint::WebFilteringBlocked$</field>
-    <description>Sophos: web policy violation on $(location)</description>
+    <description>Sophos web policy: $(name) [$(location)]</description>
     <group>sophos_web,</group>
   </rule>
 
   <rule id="100231" level="5">
     <if_sid>100200</if_sid>
     <field name="type">^Event::Endpoint::NonCompliant$</field>
-    <description>Sophos: endpoint out of compliance - $(location)</description>
+    <description>Sophos compliance: $(name) [$(location)]</description>
     <group>sophos_compliance,</group>
   </rule>
 
   <rule id="100232" level="5">
     <if_sid>100200</if_sid>
     <field name="type">^Event::Endpoint::UpdateFailure$</field>
-    <description>Sophos: endpoint protection update failed - $(location)</description>
+    <description>Sophos update failed: $(name) [$(location)]</description>
     <group>sophos_compliance,</group>
   </rule>
 
@@ -165,7 +165,7 @@
   <rule id="100233" level="5">
     <if_sid>100200</if_sid>
     <field name="type">^Event::Endpoint::Application::Blocked$</field>
-    <description>Sophos: application blocked - $(name) on $(location)</description>
+    <description>Sophos app blocked: $(name) [$(location)]</description>
     <group>sophos_policy,</group>
   </rule>
 
@@ -176,7 +176,7 @@
   <rule id="100234" level="3">
     <if_sid>100200</if_sid>
     <field name="type">^Event::Endpoint::UpdateRebootRequired$</field>
-    <description>Sophos: reboot required to complete update - $(location)</description>
+    <description>Sophos: $(name) [$(location)]</description>
     <group>sophos_compliance,</group>
   </rule>
 
@@ -191,14 +191,14 @@
   <rule id="100240" level="10">
     <if_sid>100200</if_sid>
     <field name="datastream">^alert$</field>
-    <description>Sophos Central alert: $(name) on $(location)</description>
+    <description>Sophos Central alert: $(name) [$(location)]</description>
     <group>sophos_alert,</group>
   </rule>
 
   <rule id="100241" level="13">
     <if_sid>100240</if_sid>
     <field name="severity">^high$|^very_high$</field>
-    <description>Sophos Central HIGH alert: $(name) on $(location)</description>
+    <description>Sophos Central HIGH alert: $(name) [$(location)]</description>
     <group>sophos_alert,</group>
   </rule>
 
@@ -210,21 +210,21 @@
   <rule id="100203" level="10">
     <if_sid>100200</if_sid>
     <field name="severity">^high$|^very_high$</field>
-    <description>Sophos Central: $(type) on $(location)</description>
+    <description>Sophos: $(name) [$(location)]</description>
     <group>sophos_high,</group>
   </rule>
 
   <rule id="100202" level="7">
     <if_sid>100200</if_sid>
     <field name="severity">^medium$</field>
-    <description>Sophos Central: $(type) on $(location)</description>
+    <description>Sophos: $(name) [$(location)]</description>
     <group>sophos_medium,</group>
   </rule>
 
   <rule id="100201" level="3">
     <if_sid>100200</if_sid>
     <field name="severity">^none$|^low$</field>
-    <description>Sophos Central: $(type) on $(location)</description>
+    <description>Sophos: $(name) [$(location)]</description>
     <group>sophos_low,</group>
   </rule>
 
@@ -237,7 +237,7 @@
   <rule id="100290" level="14" frequency="4" timeframe="600">
     <if_matched_sid>100210</if_matched_sid>
     <same_field>location</same_field>
-    <description>Sophos: repeated malware detections on $(location) - possible outbreak</description>
+    <description>Sophos OUTBREAK: repeated malware detections on $(location)</description>
     <group>malware,sophos_threat,</group>
   </rule>
 
@@ -248,14 +248,14 @@
     <if_matched_sid>100210</if_matched_sid>
     <same_field>name</same_field>
     <different_field>location</different_field>
-    <description>Sophos: same threat on multiple endpoints - possible worm activity</description>
+    <description>Sophos WORM: $(name) seen on multiple endpoints</description>
     <group>malware,sophos_threat,</group>
   </rule>
 
   <rule id="100292" level="12" frequency="8" timeframe="300">
     <if_matched_sid>100212</if_matched_sid>
     <same_field>location</same_field>
-    <description>Sophos: repeated cleanup failures on $(location) - endpoint may be compromised</description>
+    <description>Sophos: repeated cleanup failures on $(location), endpoint may be compromised</description>
     <group>malware,sophos_threat,</group>
   </rule>
 

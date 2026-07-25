@@ -1,0 +1,57 @@
+<!--
+  OPTIONAL noise suppression for the Sophos Central integration.
+
+  Copy to /var/ossec/etc/rules/0911-sophos_overrides.xml (drop the .sample)
+  and restart wazuh-manager. Install this only if the routine event types are
+  crowding out the ones you care about.
+
+  Setting level 0 stops an alert being generated, but the event is still
+  decoded and still written to the archives if you have archiving enabled. So
+  unlike `siem.py --light`, which drops events at the API and loses them
+  permanently, everything here remains recoverable after an incident. That is
+  the reason to tune noise here rather than at the collector.
+
+  Measured against one day of a real tenant, these four types were 174 of 266
+  events - about 65% of the volume, and none of it actionable:
+
+      72  Event::Endpoint::CoreDismissed          malware marked as resolved
+      67  Event::Endpoint::UpdateRebootRequired   reboot pending
+      31  Event::Endpoint::UpdateSuccess          update succeeded
+       4  Event::Endpoint::SavScanComplete        scheduled scan finished
+
+  Silence them selectively. Each block below is independent - delete the ones
+  you want to keep alerting on.
+
+  Note CoreDismissed is a judgement call rather than pure noise: it means
+  somebody marked a malware detection as resolved. If your team wants to
+  review those, delete that block, or give it a level instead of 0.
+-->
+<group name="sophos,sophos_central,">
+
+  <!-- Reboot pending. High volume, and the endpoint stays protected in the
+       meantime, so it is a hygiene metric rather than an alert. -->
+  <rule id="100234" level="0" overwrite="yes">
+    <if_sid>100200</if_sid>
+    <field name="type">^Event::Endpoint::UpdateRebootRequired$</field>
+    <description>Sophos: reboot required (suppressed)</description>
+    <group>sophos_compliance,</group>
+  </rule>
+
+  <!-- Successful updates and completed scans: the system working normally. -->
+  <rule id="100235" level="0">
+    <if_sid>100200</if_sid>
+    <field name="type">^Event::Endpoint::UpdateSuccess$|^Event::Endpoint::SavScanComplete$</field>
+    <description>Sophos: routine maintenance event (suppressed)</description>
+    <group>sophos_compliance,</group>
+  </rule>
+
+  <!-- Detection dismissed. Delete this block if you want to review every
+       dismissal - that is a reasonable policy, it is simply noisy. -->
+  <rule id="100217" level="0" overwrite="yes">
+    <if_sid>100200</if_sid>
+    <field name="type">^Event::Endpoint::CoreDismissed$</field>
+    <description>Sophos: detection dismissed (suppressed)</description>
+    <group>sophos_threat,</group>
+  </rule>
+
+</group>
