@@ -52,6 +52,35 @@ logging_level = INFO
 `<srcip>`/`<user>` matching. See [`wazuh/README.md`](../wazuh/README.md) for
 why that matters.
 
+#### Migrating an existing install to a new directory
+
+If you are moving the collector - a fresh clone in `/opt` replacing an older
+one in a home directory, say - the output path changes, and Wazuh keeps
+reading the old one until you tell it otherwise. The symptom is a collector
+that looks entirely healthy while no new Sophos data reaches the dashboard.
+
+Check the two paths agree before anything else:
+
+```bash
+# What the collector writes
+grep -E '^\s*filename\s*=' /opt/sophos-siem/config.ini
+
+# What Wazuh reads
+sudo grep -n '<location>' /var/ossec/etc/ossec.conf
+```
+
+Three things to get right when you move:
+
+1. **Copy `config.ini` and `state/`.** Both are gitignored, so a fresh clone
+   has neither. Without the state file the first run re-fetches 12 hours and
+   duplicates all of it.
+2. **Disable the old install's schedule.** Two collectors with separate state
+   files both fetch everything, and Wazuh does not deduplicate.
+3. **Repoint `<localfile>` and restart the manager.**
+
+Giving the new output a distinct filename rather than reusing `result.txt`
+makes a half-finished migration obvious instead of silent.
+
 #### Migrating from `format = json`
 
 Field names change, so check anything you already built before switching.
@@ -260,8 +289,22 @@ EOF
 types genuinely lack one. If it is present in the raw event but not promoted,
 check the promoted-name list for your Wazuh version.
 
-**Nothing read at all.** Confirm the Wazuh user can traverse the path to the
-log directory, and check `/var/ossec/logs/ossec.log` for the localfile.
+**Nothing read at all.** Check, in this order:
+
+1. **The paths agree.** Compare `filename` in `config.ini` against
+   `<location>` in `ossec.conf`. After moving the collector these diverge
+   silently, and everything else looks healthy.
+2. **The Wazuh user can reach the file.**
+   `sudo -u wazuh test -r <path>` - it needs execute on every parent directory,
+   which bites under `/opt` and under home directories.
+3. **logcollector opened it.** Restart the manager, then
+   `grep <path> /var/ossec/logs/ossec.log`. That line is only written at
+   startup, so an empty grep on a long-running manager proves nothing.
+
+**Alerts stopped after cleaning up the file.** Rewriting the output file with
+`mv` gives it a new inode, and logcollector keeps reading the old, unlinked
+one. Truncate in place instead - `cat tmp > file` rather than `mv tmp file` -
+or restart the manager.
 
 **Duplicate events after an incident.** The state file was reset, so the run
 re-fetched the last 12 hours. Expected; Wazuh does not deduplicate.
