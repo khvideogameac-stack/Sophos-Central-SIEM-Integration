@@ -46,7 +46,7 @@
        wins for events matching both shapes. -->
   <rule id="100212" level="13">
     <if_sid>100200</if_sid>
-    <field name="type">Threat::\.*CleanupFailed$</field>
+    <field name="type">Threat::\.*CleanupFailed$|Core\.*CleanFailed$</field>
     <description>Sophos: malware cleanup FAILED - $(name) on $(location)</description>
     <group>malware,sophos_threat,</group>
     <mitre>
@@ -66,7 +66,7 @@
 
   <rule id="100210" level="12">
     <if_sid>100200</if_sid>
-    <field name="type">^Event::Endpoint::Threat::Detected$</field>
+    <field name="type">^Event::Endpoint::Threat::Detected$|^Event::Endpoint::CoreDetection$</field>
     <description>Sophos: malware detected - $(name) on $(location)</description>
     <group>malware,sophos_threat,</group>
     <mitre>
@@ -90,7 +90,7 @@
 
   <rule id="100213" level="10">
     <if_sid>100200</if_sid>
-    <field name="type">^Event::Endpoint::Threat::PuaDetected$</field>
+    <field name="type">^Event::Endpoint::Threat::PuaDetected$|^Event::Endpoint::CorePuaDetection$</field>
     <description>Sophos: potentially unwanted application - $(name) on $(location)</description>
     <group>malware,sophos_threat,</group>
   </rule>
@@ -105,9 +105,20 @@
 
   <rule id="100211" level="6">
     <if_sid>100200</if_sid>
-    <field name="type">^Event::Endpoint::Threat::CleanedUp$</field>
+    <field name="type">^Event::Endpoint::Threat::CleanedUp$|^Event::Endpoint::CorePuaClean$|^Event::Endpoint::CoreClean$</field>
     <description>Sophos: malware cleaned up - $(name) on $(location)</description>
     <group>malware,sophos_threat,</group>
+  </rule>
+
+  <!-- A detection dismissed in Sophos Central. Deliberately lower than the
+       HIPS equivalent above: in a real tenant these run to dozens a day, and
+       at level 9 they drown everything else. Raise it if dismissals are rare
+       in your environment, or if you want to review every one. -->
+  <rule id="100217" level="5">
+    <if_sid>100200</if_sid>
+    <field name="type">^Event::Endpoint::CoreDismissed$</field>
+    <description>Sophos: detection dismissed - $(name) on $(location)</description>
+    <group>sophos_threat,</group>
   </rule>
 
   <!-- ===============================================================
@@ -146,6 +157,26 @@
     <if_sid>100200</if_sid>
     <field name="type">^Event::Endpoint::UpdateFailure$</field>
     <description>Sophos: endpoint protection update failed - $(location)</description>
+    <group>sophos_compliance,</group>
+  </rule>
+
+  <!-- Application control did its job. Worth recording, not worth waking
+       anyone: the block already happened. -->
+  <rule id="100233" level="5">
+    <if_sid>100200</if_sid>
+    <field name="type">^Event::Endpoint::Application::Blocked$</field>
+    <description>Sophos: application blocked - $(name) on $(location)</description>
+    <group>sophos_policy,</group>
+  </rule>
+
+  <!-- Endpoint is waiting on a reboot to finish updating. High volume and
+       low urgency, but it is the signal that protection is not fully
+       current, so it belongs in the compliance group rather than the
+       generic severity fallback. -->
+  <rule id="100234" level="3">
+    <if_sid>100200</if_sid>
+    <field name="type">^Event::Endpoint::UpdateRebootRequired$</field>
+    <description>Sophos: reboot required to complete update - $(location)</description>
     <group>sophos_compliance,</group>
   </rule>
 

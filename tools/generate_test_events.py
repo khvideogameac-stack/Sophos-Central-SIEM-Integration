@@ -146,6 +146,96 @@ SCENARIOS = OUTBREAK_BURST + [
     ),
 ]
 
+# Sophos Central also emits a newer Core* naming scheme, and which one a tenant
+# sends appears to depend on the platform and product version. Rules written
+# only against the legacy Threat::* names silently fall through to the severity
+# fallback on a tenant using these, which downgrades a malware detection to a
+# generic informational alert. These scenarios keep that from regressing.
+CORE_SCENARIOS = [
+    scenario(
+        "Event::Endpoint::CoreDetection",
+        "medium",
+        "TEST-WKS-10",
+        TEST_NET_1 + "30",
+        "testuser10@example.com",
+        "Mal/Generic-TEST",
+        "MALWARE",
+        100210,
+    ),
+    scenario(
+        "Event::Endpoint::CoreCleanFailed",
+        "medium",
+        "TEST-WKS-11",
+        TEST_NET_1 + "31",
+        "testuser11@example.com",
+        "Mal/Generic-TEST",
+        "MALWARE",
+        100212,
+    ),
+    scenario(
+        "Event::Endpoint::CorePuaCleanFailed",
+        "medium",
+        "TEST-WKS-12",
+        TEST_NET_1 + "32",
+        "testuser12@example.com",
+        "Generic Reputation PUA",
+        "MALWARE",
+        100212,
+    ),
+    scenario(
+        "Event::Endpoint::CorePuaDetection",
+        "medium",
+        "TEST-WKS-13",
+        TEST_NET_1 + "33",
+        "testuser13@example.com",
+        "Generic Reputation PUA",
+        "MALWARE",
+        100213,
+    ),
+    scenario(
+        "Event::Endpoint::CorePuaClean",
+        "low",
+        "TEST-WKS-14",
+        TEST_NET_1 + "34",
+        "testuser14@example.com",
+        "Generic Reputation PUA",
+        "MALWARE",
+        100211,
+    ),
+    scenario(
+        "Event::Endpoint::CoreDismissed",
+        "low",
+        "TEST-WKS-15",
+        TEST_NET_1 + "35",
+        "testuser15@example.com",
+        "Detection dismissed",
+        "MALWARE",
+        100217,
+    ),
+    scenario(
+        "Event::Endpoint::Application::Blocked",
+        "medium",
+        "TEST-WKS-16",
+        TEST_NET_1 + "36",
+        "testuser16@example.com",
+        "Blocked application",
+        "APPLICATION_CONTROL",
+        100233,
+    ),
+    scenario(
+        "Event::Endpoint::UpdateRebootRequired",
+        "low",
+        "TEST-WKS-17",
+        TEST_NET_1 + "37",
+        "testuser17@example.com",
+        "Reboot to complete update",
+        "UPDATING",
+        100234,
+    ),
+]
+
+SCENARIOS = SCENARIOS + CORE_SCENARIOS
+
 # Human readable expectation per rule id, for --explain.
 RULE_DESCRIPTIONS = {
     100210: "malware detected (level 12); 4+ of these also trigger 100290 outbreak",
@@ -155,6 +245,10 @@ RULE_DESCRIPTIONS = {
     100220: "DLP user allowed transfer (level 8)",
     100216: "malware ALERT via alert stream (level 13)",
     100241: "high severity alert (level 13)",
+    100211: "malware cleaned up (level 6)",
+    100217: "detection dismissed (level 5)",
+    100233: "application blocked (level 5)",
+    100234: "reboot required to complete update (level 3)",
 }
 
 
