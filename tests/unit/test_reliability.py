@@ -90,8 +90,6 @@ class TestRequestRetry(unittest.TestCase):
 
     @patch("api_client.time.sleep")
     def test_retries_connection_errors(self, _sleep):
-        # URLError, not HTTPError: DNS failure, refused connection, TLS timeout.
-        # These were previously not caught at all and killed the run.
         self.client.opener.open = MagicMock(side_effect=urlerror.URLError("no dns"))
         with self.assertRaises(api_client.SophosApiError):
             self.client.request_url("http://x", None, {}, retry_count=2)
@@ -108,7 +106,6 @@ class TestRequestRetry(unittest.TestCase):
         self.assertEqual(result, b'{"ok": true}')
 
     def test_does_not_retry_client_errors(self):
-        # A 400 will fail identically every time, retrying just delays the error.
         err = self.http_error(400)
         err.read = MagicMock(return_value=b"bad request")
         self.client.opener.open = MagicMock(side_effect=err)
@@ -125,14 +122,11 @@ class TestRequestRetry(unittest.TestCase):
         self.assertEqual(self.client.retry_delay(0, retry_after="7"), 7)
 
     def test_ignores_unparsable_retry_after(self):
-        # Retry-After may be an HTTP date, which we do not parse; fall back.
         delay = self.client.retry_delay(0, retry_after="Wed, 21 Oct 2026 07:28:00 GMT")
         self.assertGreater(delay, 0)
 
 
 class TestResponseValidation(unittest.TestCase):
-    """A malformed page response used to raise a bare KeyError on next_cursor."""
-
     def setUp(self):
         self.client = build_client()
 
@@ -157,8 +151,6 @@ class TestResponseValidation(unittest.TestCase):
 
 
 class TestIntConfig(unittest.TestCase):
-    """Missing options must not break an upgrade from an older config.ini."""
-
     def setUp(self):
         self.client = build_client()
 
@@ -193,8 +185,6 @@ class TestAtomicStateWrite(unittest.TestCase):
         self.assertEqual(leftovers, [])
 
     def test_previous_content_survives_a_failed_write(self):
-        # The point of writing to a temp file and renaming: a failure part way
-        # through must not leave a truncated state file behind.
         self.state.save_state("tenants.t1.cursor", "first")
         with patch("os.replace", side_effect=OSError("disk full")):
             with self.assertRaises(OSError):
@@ -212,7 +202,7 @@ class TestAtomicStateWrite(unittest.TestCase):
 
 
 class TestRunLock(unittest.TestCase):
-    """Overlapping cron runs race the cursor and duplicate events downstream."""
+    """Overlapping runs must serialize on one persistent lock-file inode."""
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp(prefix="lock_test")
@@ -236,21 +226,18 @@ class TestRunLock(unittest.TestCase):
         self.assertTrue(second.acquire())
         second.release()
 
-    def test_release_removes_lock_file(self):
+    def test_release_keeps_lock_file(self):
         lock = state.RunLock(self.lock_path)
         lock.acquire()
         lock.release()
-        self.assertFalse(os.path.exists(self.lock_path))
+        self.assertTrue(os.path.exists(self.lock_path))
 
     def test_works_as_context_manager(self):
         with state.RunLock(self.lock_path) as lock:
             self.assertTrue(lock.acquire())
-        self.assertFalse(os.path.exists(self.lock_path))
+        self.assertTrue(os.path.exists(self.lock_path))
 
     def test_unopenable_lock_file_is_not_reported_as_contention(self):
-        # A permission error on the lock file used to return False, which the
-        # caller reported as "another run holds it" - sending the operator
-        # hunting for a process that does not exist.
         with patch("builtins.open", side_effect=PermissionError(13, "denied")):
             with self.assertRaises(state.LockUnavailable) as ctx:
                 state.RunLock(self.lock_path).acquire()
@@ -262,8 +249,6 @@ class TestRunLock(unittest.TestCase):
             lock.acquire()
 
     def test_stale_lock_file_does_not_block(self):
-        # flock is released by the kernel when the holder dies, so a lock file
-        # left behind by a killed run must not wedge the next one.
         with open(self.lock_path, "w") as f:
             f.write("99999")
         lock = state.RunLock(self.lock_path)
@@ -280,7 +265,6 @@ class TestRunLock(unittest.TestCase):
 
 class TestExitCodes(unittest.TestCase):
     def test_all_failure_codes_are_non_zero(self):
-        # A bare `raise SystemExit()` exits 0, which is what this guards against.
         for name in (
             "CONFIG_ERROR",
             "AUTH_ERROR",

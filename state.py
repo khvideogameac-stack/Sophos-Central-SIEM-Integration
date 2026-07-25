@@ -40,8 +40,11 @@ class RunLock:
     Overlapping runs - a slow run still paginating when cron starts the next
     one - race on the cursor, which duplicates events downstream and can move
     the cursor backwards. Held for the lifetime of the process; the lock is
-    released by the OS if we are killed, so a lock file left behind by a killed
-    run does not block the next one.
+    released by the OS if we are killed.
+
+    The lock file is deliberately persistent. Unlinking it after releasing the
+    flock creates a race where another process can lock the old inode while a
+    third process creates and locks a new file at the same pathname.
     """
 
     def __init__(self, lock_file):
@@ -59,12 +62,7 @@ class RunLock:
             logging.debug("File locking unavailable on this platform, skipping run lock")
             return True
 
-        # Opening and locking are separate failures and must not be conflated.
-        # Reporting "another run holds it" for what is really a permission
-        # error sends you hunting for a process that does not exist.
         try:
-            # Append rather than truncate, so a failure here cannot destroy the
-            # pid recorded by whoever does hold the lock.
             self.handle = open(self.lock_file, "a")
         except OSError as e:
             raise LockUnavailable(
@@ -79,7 +77,6 @@ class RunLock:
             self.handle.close()
             self.handle = None
             if e.errno in (errno.EACCES, errno.EAGAIN):
-                # Genuine contention: someone else holds it right now.
                 return False
             raise LockUnavailable(
                 "Cannot lock %s: %s" % (self.lock_file, e)
@@ -91,21 +88,22 @@ class RunLock:
             self.handle.write(str(os.getpid()))
             self.handle.flush()
         except OSError:
-            # The pid is a debugging aid, not load-bearing. We hold the lock.
             pass
         return True
 
     def release(self):
-        """Release the lock and remove the lock file."""
+        """Release the advisory lock while leaving the lock file in place."""
         if self.handle is None:
             return
         try:
             fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
-            self.handle.close()
-            os.unlink(self.lock_file)
         except (IOError, OSError):
             pass
         finally:
+            try:
+                self.handle.close()
+            except (IOError, OSError):
+                pass
             self.handle = None
 
     def __enter__(self):
@@ -141,7 +139,6 @@ class State:
         """
         return self.state_file + ".lock"
 
-  
     def create_state_dir(self, state_file):
         """Create state directory
         Arguments:
@@ -197,7 +194,6 @@ class State:
             state_data_key {string}: state key
             state_data_value {string}: state value
         """
-        # Store state
         key_arr = state_data_key.split(".")
         sub_data = self.state_data
         for item in key_arr[0:-1]:
@@ -228,8 +224,6 @@ class State:
                 os.fsync(f.fileno())
             os.replace(tmp_path, self.state_file)
         except Exception as e:
-            # Failing to persist the cursor means the next run re-fetches this
-            # page, so it must be loud rather than swallowed.
             logging.error("Failed to write state file %s: %s" % (self.state_file, e))
             try:
                 os.unlink(tmp_path)
